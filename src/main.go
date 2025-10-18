@@ -19,11 +19,12 @@ import (
 )
 
 var (
-	version   = "0.1.0"
-	userAgent string
-	port      int
-	logLevel  string
-	showVer   bool
+	version     = "0.1.0"
+	userAgent   string
+	port        int
+	logLevel    string
+	showVer     bool
+	HTTP_METHOD = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
 )
 
 func main() {
@@ -64,11 +65,7 @@ func main() {
 	}
 	defer listener.Close()
 
-	if err := initTCPTProxy(listener); err != nil {
-		logrus.Fatalf("Init TPROXY failed: %v", err)
-	}
-
-	logrus.Infof("TPROXY server listening on 0.0.0.0:%d", port)
+	logrus.Infof("REDIRECT proxy server listening on 0.0.0.0:%d", port)
 
 	for {
 		conn, err := listener.AcceptTCP()
@@ -126,23 +123,9 @@ func handleConnection(clientConn *net.TCPConn) {
 	// 等待任意一个方向结束
 	<-done
 }
-func initTCPTProxy(listener *net.TCPListener) error {
-	file, err := listener.File()
-	if err != nil {
-		return fmt.Errorf("failed to get file descriptor: %w", err)
-	}
-	defer file.Close()
 
-	fd := int(file.Fd())
-
-	// 设置 IP_TRANSPARENT 选项
-	if err := unix.SetsockoptInt(fd, unix.SOL_IP, unix.IP_TRANSPARENT, 1); err != nil {
-		return fmt.Errorf("setsockopt IP_TRANSPARENT failed: %w", err)
-	}
-
-	return nil
-}
-
+// getOriginalDst 获取被 REDIRECT 规则重定向前的原始目标地址
+// 使用 SO_ORIGINAL_DST socket 选项，这是 iptables REDIRECT 目标填充的
 func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 	file, err := conn.File()
 	if err != nil {
@@ -184,19 +167,25 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 }
 
 // 检查是否是 HTTP 请求
-func isHTTP(reader *bufio.Reader) bool {
+func isHTTP(reader *bufio.Reader) (bool, error) {
 	buf, err := reader.Peek(7)
 	if err != nil {
-		return false
+		if strings.Contains(err.Error(), "EOF") {
+			logrus.Debug(fmt.Sprintf("Peek EOF: %s", err.Error()))
+		} else {
+			logrus.Error(fmt.Sprintf("Peek error: %s", err.Error()))
+		}
+		return false, err
 	}
 	hint := string(buf)
-	httpMethods := []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
-	for _, method := range httpMethods {
-		if strings.HasPrefix(hint, method) {
-			return true
+	is_http := false
+	for _, v := range HTTP_METHOD {
+		if strings.HasPrefix(hint, v) {
+			is_http = true
+			break
 		}
 	}
-	return false
+	return is_http, nil
 }
 
 // 修改 User-Agent 并转发数据
@@ -204,7 +193,14 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	srcReader := bufio.NewReader(src)
 
 	// 检查是否是 HTTP 请求
-	if !isHTTP(srcReader) {
+	is_http, err := isHTTP(srcReader)
+	if err != nil {
+		if strings.Contains(err.Error(), "use of closed network connection") {
+			logrus.Warnf("[%s] isHTTP error: %s", destAddrPort, err.Error())
+			return
+		}
+	}
+	if !is_http && err == nil {
 		logrus.Debugf("[%s] Not HTTP, direct relay", destAddrPort)
 		io.Copy(dst, srcReader)
 		return

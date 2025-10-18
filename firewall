@@ -1,0 +1,5 @@
+config include 'ua3f_rules'
+	option type 'nftables'
+	option path '/etc/config/ua3f_rules.nft'
+	option enabled '1'
+
