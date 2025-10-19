@@ -12,7 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"unsafe"
-
+	"time"
+	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
@@ -23,6 +24,7 @@ var (
 	port        int
 	logLevel    string
 	showVer     bool
+	cache       *expirable.LRU[string, string]
 	HTTP_METHOD = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
 	whitelist   = []string{
 		"MicroMessenger Client",
@@ -55,7 +57,8 @@ func main() {
 	logrus.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})
-
+	cache = expirable.NewLRU[string, string](300, nil, time.Second*600)
+	
 	// 打印配置信息
 	logrus.Infof("UA3F-TPROXY v%s", version)
 	logrus.Infof("Port: %d", port)
@@ -111,11 +114,23 @@ func handleConnection(clientConn *net.TCPConn) {
 	done := make(chan struct{}, 2)
 
 	// 客户端 -> 服务器 (需要修改 UA)
-	go func() {
-		defer serverConn.CloseWrite()
-		modifyAndForward(serverConn, clientConn, destAddrPort)
-		done <- struct{}{}
-	}()
+	if cache.Contains(destAddrPort) {
+		// 命中缓存，直接转发
+		logrus.Debugf("[%s] Hit LRU cache, direct relaying Client -> Server", destAddrPort)
+		go func() {
+			defer serverConn.CloseWrite()
+			io.Copy(serverConn, clientConn)
+			done <- struct{}{}
+		}()
+	} else {
+		// 未命中缓存，进行 UA 修改
+		logrus.Debugf("[%s] Cache miss, processing Client -> Server", destAddrPort)
+		go func() {
+			defer serverConn.CloseWrite()
+			modifyAndForward(serverConn, clientConn, destAddrPort)
+			done <- struct{}{}
+		}()
+	}
 
 	// 服务器 -> 客户端 (直接转发)
 	go func() {
@@ -206,6 +221,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	}
 	if !is_http && err == nil {
 		logrus.Debugf("[%s] Not HTTP, direct relay", destAddrPort)
+		cache.Add(destAddrPort, destAddrPort)
 		io.Copy(dst, srcReader)
 		return
 	}
@@ -234,6 +250,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 		uaStr := request.Header.Get("User-Agent")
 		if uaStr == "" {
 			logrus.Debugf("[%s] No User-Agent header, skip modification", destAddrPort)
+			cache.Add(destAddrPort, destAddrPort)
 			// 没有 UA，写入请求后直接转发剩余数据
 			if err = request.Write(dst); err != nil {
 				logrus.Errorf("[%s] Write error: %v", destAddrPort, err)
@@ -253,6 +270,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 
 		if isInWhiteList {
 			logrus.Debugf("[%s] Hit User-Agent Whitelist: %s", destAddrPort, uaStr)
+			cache.Add(destAddrPort, destAddrPort)
 			// 白名单中的 UA 不修改，直接转发
 			err = request.Write(dst)
 			if err != nil {
