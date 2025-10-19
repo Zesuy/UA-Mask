@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"strings"
 	"unsafe"
 	"time"
@@ -207,11 +206,11 @@ func isHTTP(reader *bufio.Reader) (bool, error) {
 	return is_http, nil
 }
 
-// 修改 User-Agent 并转发数据
+// 修改 User-Agent 并转发数据 (高性能流式版本)
 func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	srcReader := bufio.NewReader(src)
 
-	// 检查是否是 HTTP 请求
+	// 1. 检查是否是 HTTP 请求 (这个检查仍然是必要的)
 	is_http, err := isHTTP(srcReader)
 	if err != nil {
 		if strings.Contains(err.Error(), "use of closed network connection") {
@@ -220,81 +219,100 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 		}
 	}
 	if !is_http && err == nil {
-		logrus.Debugf("[%s] Not HTTP, direct relay", destAddrPort)
+		logrus.Debugf("[%s] Not HTTP, direct relay. Adding to LRU cache.", destAddrPort)
 		cache.Add(destAddrPort, destAddrPort)
-		io.Copy(dst, srcReader)
+		io.Copy(dst, srcReader) // 转发非 HTTP 数据
 		return
 	}
 
-	logrus.Debugf("[%s] HTTP detected, processing...", destAddrPort)
+	logrus.Debugf("[%s] HTTP detected, processing with streaming parser...", destAddrPort)
+	
+	uaFound := false // 标记是否找到了 UA
 
-	// 处理 HTTP 请求
+	// 2. 开始逐行扫描 HTTP Headers
 	for {
-		request, err := http.ReadRequest(srcReader)
+		// 3. 逐行读取 Header
+		line, err := srcReader.ReadString('\n')
 		if err != nil {
-			if err == io.EOF {
-				logrus.Debugf("[%s] Connection closed by client", destAddrPort)
-			} else if strings.Contains(err.Error(), "use of closed network connection") {
-				logrus.Debugf("[%s] Connection closed", destAddrPort)
-			} else if strings.Contains(err.Error(), "connection reset by peer") {
-				logrus.Debugf("[%s] Connection reset by peer", destAddrPort)
-			} else if strings.Contains(err.Error(), "i/o timeout") {
-				logrus.Debugf("[%s] Read timeout", destAddrPort)
+			if err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
+				logrus.Debugf("[%s] Read header line error: %v", destAddrPort, err)
 			} else {
-				logrus.Errorf("[%s] Read request error: %v", destAddrPort, err)
+				logrus.Debugf("[%s] Connection closed while reading headers", destAddrPort)
 			}
-			return
+			return // 连接关闭或读取错误
 		}
 
-		// 获取原始 UA
-		uaStr := request.Header.Get("User-Agent")
-		if uaStr == "" {
-			logrus.Debugf("[%s] No User-Agent header, skip modification", destAddrPort)
-			cache.Add(destAddrPort, destAddrPort)
-			// 没有 UA，写入请求后直接转发剩余数据
-			if err = request.Write(dst); err != nil {
-				logrus.Errorf("[%s] Write error: %v", destAddrPort, err)
+		// 4. 检查是否是 Header 的结尾 (空行)
+		if line == "\r\n" || line == "\n" {
+			// Header 结束
+			if !uaFound {
+				// 整个 Header 都读完了，也没找到 User-Agent
+				logrus.Debugf("[%s] No User-Agent header, skip modification. Adding to LRU cache.", destAddrPort)
+				cache.Add(destAddrPort, destAddrPort)
 			}
+			
+			// 将 Header 的结尾（空行）写入目标
+			if _, err = io.WriteString(dst, line); err != nil {
+				logrus.Errorf("[%s] Write header end error: %v", destAddrPort, err)
+				return
+			}
+
+			// 5. 【关键】快速转发剩余所有数据
+			// 这会转发请求体 (Request Body) 以及此 TCP 连接上
+			// 后续所有的 Keep-Alive 请求，不再进行任何解析。
+			logrus.Debugf("[%s] Header end, starting fast relay (io.Copy)", destAddrPort)
 			io.Copy(dst, srcReader)
-			return
+			return // 此连接处理完毕
 		}
 
-		// 检查是否在白名单中
-		isInWhiteList := false
-		for _, v := range whitelist {
-			if v == uaStr {
-				isInWhiteList = true
-				break
+		// 6. 检查是否是 User-Agent 行 (高性能、不区分大小写)
+		if len(line) > 11 && strings.EqualFold(line[:11], "user-agent:") {
+			uaFound = true
+			// 提取 UA 字符串
+			uaStr := strings.TrimSpace(line[11:])
+
+			// 检查白名单
+			isInWhiteList := false
+			for _, v := range whitelist {
+				if v == uaStr {
+					isInWhiteList = true
+					break
+				}
 			}
-		}
 
-		if isInWhiteList {
-			logrus.Debugf("[%s] Hit User-Agent Whitelist: %s", destAddrPort, uaStr)
-			cache.Add(destAddrPort, destAddrPort)
-			// 白名单中的 UA 不修改，直接转发
-			err = request.Write(dst)
-			if err != nil {
-				logrus.Errorf("[%s] Write error: %v", destAddrPort, err)
-				break
-			}
-			io.Copy(dst, srcReader)
-			return
-		}
-
-		// 修改 User-Agent (使用全局变量 userAgent)
-		logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
-		request.Header.Set("User-Agent", userAgent)
-		logrus.Infof("[%s] UA modified: %s -> %s", destAddrPort, uaStr, userAgent)
-
-		// 写入修改后的请求
-		err = request.Write(dst)
-		if err != nil {
-			if strings.Contains(err.Error(), "use of closed network connection") {
-				logrus.Debugf("[%s] Write failed: connection closed", destAddrPort)
+			if isInWhiteList {
+				logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. Adding to LRU cache.", destAddrPort, uaStr)
+				cache.Add(destAddrPort, destAddrPort)
+				// 白名单，写入原始行
+				if _, err = io.WriteString(dst, line); err != nil {
+					logrus.Errorf("[%s] Write original UA line error: %v", destAddrPort, err)
+					return
+				}
 			} else {
-				logrus.Errorf("[%s] Write request error after replace user-agent: %v", destAddrPort, err)
+				// 不在白名单，执行修改
+				logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
+				
+				// 构造新行，同时必须保留原始的行尾 (CRLF 或 LF)
+				var newLine string
+				if strings.HasSuffix(line, "\r\n") {
+					newLine = fmt.Sprintf("User-Agent: %s\r\n", userAgent)
+				} else {
+					newLine = fmt.Sprintf("User-Agent: %s\n", userAgent)
+				}
+				
+				// 写入修改后的行
+				if _, err = io.WriteString(dst, newLine); err != nil {
+					logrus.Errorf("[%s] Write modified UA line error: %v", destAddrPort, err)
+					return
+				}
+				logrus.Infof("[%s] UA modified: %s -> %s", destAddrPort, uaStr, userAgent)
 			}
-			return
+		} else {
+			// 7. 不是 UA 行，也不是空行，说明是其他 Header，原样写入
+			if _, err = io.WriteString(dst, line); err != nil {
+				logrus.Errorf("[%s] Write header line error: %v", destAddrPort, err)
+				return
+			}
 		}
-	}
+	} // 循环读取下一行 Header
 }
