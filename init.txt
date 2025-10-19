@@ -1,0 +1,2 @@
+su -s /bin/ash nobody -c '"/root/ua3f-tproxy" -ua "fff" -port 8080 -loglevel debug  '
+compile

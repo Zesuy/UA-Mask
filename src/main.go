@@ -5,7 +5,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +24,11 @@ var (
 	logLevel    string
 	showVer     bool
 	HTTP_METHOD = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
+	whitelist   = []string{
+		"MicroMessenger Client",
+		"ByteDancePcdn",
+		"Go-http-client/1.1",
+	}
 )
 
 func main() {
@@ -158,8 +162,8 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 
 	// 解析 IPv4 地址和端口 (网络字节序)
 	ip := net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
-	port := int(binary.BigEndian.Uint16([]byte{byte(addr.Port >> 8), byte(addr.Port & 0xff)}))
-
+	port := int(addr.Port>>8 | addr.Port<<8)
+	logrus.Debugf("getOriginalDst raw value: %d, parsed port: %d", addr.Port, port)
 	return &net.TCPAddr{
 		IP:   ip,
 		Port: port,
@@ -216,21 +220,53 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				logrus.Debugf("[%s] Connection closed by client", destAddrPort)
 			} else if strings.Contains(err.Error(), "use of closed network connection") {
 				logrus.Debugf("[%s] Connection closed", destAddrPort)
+			} else if strings.Contains(err.Error(), "connection reset by peer") {
+				logrus.Debugf("[%s] Connection reset by peer", destAddrPort)
+			} else if strings.Contains(err.Error(), "i/o timeout") {
+				logrus.Debugf("[%s] Read timeout", destAddrPort)
 			} else {
-				logrus.Debugf("[%s] Read request error: %v", destAddrPort, err)
+				logrus.Errorf("[%s] Read request error: %v", destAddrPort, err)
 			}
 			return
 		}
 
 		// 获取原始 UA
-		originalUA := request.Header.Get("User-Agent")
-		if originalUA == "" {
+		uaStr := request.Header.Get("User-Agent")
+		if uaStr == "" {
 			logrus.Debugf("[%s] No User-Agent header, skip modification", destAddrPort)
-		} else {
-			// 修改 User-Agent (使用全局变量 userAgent)
-			request.Header.Set("User-Agent", userAgent)
-			logrus.Infof("[%s] UA modified: %s -> %s", destAddrPort, originalUA, userAgent)
+			// 没有 UA，写入请求后直接转发剩余数据
+			if err = request.Write(dst); err != nil {
+				logrus.Errorf("[%s] Write error: %v", destAddrPort, err)
+			}
+			io.Copy(dst, srcReader)
+			return
 		}
+
+		// 检查是否在白名单中
+		isInWhiteList := false
+		for _, v := range whitelist {
+			if v == uaStr {
+				isInWhiteList = true
+				break
+			}
+		}
+
+		if isInWhiteList {
+			logrus.Debugf("[%s] Hit User-Agent Whitelist: %s", destAddrPort, uaStr)
+			// 白名单中的 UA 不修改，直接转发
+			err = request.Write(dst)
+			if err != nil {
+				logrus.Errorf("[%s] Write error: %v", destAddrPort, err)
+				break
+			}
+			io.Copy(dst, srcReader)
+			return
+		}
+
+		// 修改 User-Agent (使用全局变量 userAgent)
+		logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
+		request.Header.Set("User-Agent", userAgent)
+		logrus.Infof("[%s] UA modified: %s -> %s", destAddrPort, uaStr, userAgent)
 
 		// 写入修改后的请求
 		err = request.Write(dst)
@@ -238,7 +274,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			if strings.Contains(err.Error(), "use of closed network connection") {
 				logrus.Debugf("[%s] Write failed: connection closed", destAddrPort)
 			} else {
-				logrus.Errorf("[%s] Write request error: %v", destAddrPort, err)
+				logrus.Errorf("[%s] Write request error after replace user-agent: %v", destAddrPort, err)
 			}
 			return
 		}
