@@ -6,12 +6,31 @@ STOP=90 # 确保在防火墙重载前停止
 
 NAME="ua3f-tproxy"
 PROG="/usr/bin/$NAME"
+PID_FILE="/var/run/$NAME.pid"
 FW_CONFIG_NAME="ua3f_tproxy" # 防火墙 UCI 规则的名称
-NFT_PATH="/etc/config/ua3f_rules.nft" # .nft 文件的路径
+NFT_PATH="/tmp/ua3f_rules.nft" # .nft 文件的路径 (使用 /tmp/)
+
+# 仅清理规则和 uci，不重载
+unset_firewall_rules() {
+    rm -f "${NFT_PATH}" # 清理生成的规则文件
+    uci -q delete firewall.${FW_CONFIG_NAME}
+    uci commit firewall
+}
+
+# 清理防火墙规则并重载
+unset_firewall() {
+    unset_firewall_rules
+    # 兼容 fw3 和 fw4
+    fw4 reload >/dev/null 2>&1 ||
+fw3 reload >/dev/null 2>&1
+}
 
 # 自动管理防火墙规则
 set_firewall() {
-    # 1. 从 UCI 读取配置
+    # 1. 确保旧规则被彻底清除
+    unset_firewall_rules
+
+    # 2. 从 UCI 读取配置
     config_load "$NAME"
     local port
     local iface_list
@@ -25,7 +44,7 @@ set_firewall() {
     config_get bypass_ports_list "main" "bypass_ports" ""
     config_get bypass_ips_list "main" "bypass_ips" ""
 
-    # 2. 格式化接口
+    # 3. 格式化接口
     local nft_ifaces
     set -- $iface_list
     if [ "$#" -eq 1 ]; then
@@ -34,7 +53,7 @@ set_firewall() {
         nft_ifaces="{ $(echo "$iface_list" | sed -e 's/ /", "/g' -e 's/^/"/' -e 's/$/"/') }" # 多个接口
     fi
 
-    # 3. 格式化豁免 IPs
+    # 4. 格式化豁免 IPs
     local nft_ips_rule
     if [ -n "$bypass_ips_list" ]; then
         local nft_ips
@@ -44,7 +63,7 @@ set_firewall() {
         nft_ips_rule="# No bypass IPs configured"
     fi
 
-    # 4. 格式化豁免 Ports
+    # 5. 格式化豁免 Ports
     local nft_ports_rule
     if [ -n "$bypass_ports_list" ]; then
         local nft_ports
@@ -54,11 +73,11 @@ set_firewall() {
         nft_ports_rule="# No bypass ports configured"
     fi
 
-    # 5. 动态写入 .nft 文件
+    # 6. 动态写入 .nft 文件
     cat > "${NFT_PATH}" << EOF
 chain ua3f_prerouting_after {
     type nat hook prerouting priority 1;
-iifname $nft_ifaces \\
+    iifname $nft_ifaces \\
     ip protocol tcp \\
     # 豁免局域网、环回、保留地址等
     $nft_ips_rule
@@ -69,7 +88,7 @@ iifname $nft_ifaces \\
 
 chain ua3f_output_after {
     type nat hook output priority -100;
-ip protocol tcp \\
+    ip protocol tcp \\
     # 豁免局域网、环回、保留地址等
     $nft_ips_rule
     # 豁免端口
@@ -81,8 +100,7 @@ ip protocol tcp \\
 
 EOF
 
-    # 6. 注册防火墙规则
-    uci -q delete firewall.${FW_CONFIG_NAME}
+    # 7. 注册防火墙规则
     uci set firewall.${FW_CONFIG_NAME}="include"
     uci set firewall.${FW_CONFIG_NAME}.type="nftables"
     uci set firewall.${FW_CONFIG_NAME}.path="${NFT_PATH}"
@@ -93,13 +111,15 @@ EOF
 fw3 reload >/dev/null 2>&1
 }
 
-# 自动清理防火墙规则
-unset_firewall() {
-    rm -f "${NFT_PATH}" # 清理生成的规则文件
-    uci -q delete firewall.${FW_CONFIG_NAME}
-    uci commit firewall
-    fw4 reload >/dev/null 2>&1 ||
-fw3 reload >/dev/null 2>&1
+# 检查并创建专用组
+setup_group() {
+    config_load "$NAME"
+    local bypass_gid
+    config_get bypass_gid "main" "bypass_gid" "65533"
+
+    if ! grep -q ":$bypass_gid:" /etc/group; then
+        echo "ua3f-tproxy:x:$bypass_gid:" >> /etc/group
+    fi
 }
 
 start_service() {
@@ -108,46 +128,51 @@ start_service() {
     local enabled
     config_get_bool enabled "enabled" "enabled" "0"
     if [ "$enabled" -ne "1" ];
-then
+    then
         return 1
     fi
 
-    # 1. 自动设置防火墙 (现在动态生成)
+    # 1. 确保组存在
+    setup_group
+
+    # 2. 自动设置防火墙
     set_firewall
 
     local port
     local ua
     local log_level
-    local bypass_gid
     
-    # 2. 读取新程序的配置
     config_get port "main" "port" "8080"
     config_get ua "main" "ua" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     config_get log_level "main" "log_level" "info"
-    config_get bypass_gid "main" "bypass_gid" "65533" # 读取 GID
 
     procd_open_instance "$NAME"
-    procd_set_param command "$PROG"
     
-    # 3. 传递新程序的命令行参数
- 
-   procd_append_param command -port $port
-    procd_append_param command -ua "$ua"
-    procd_append_param command -loglevel $log_level
+    procd_set_param command /usr/sbin/start-stop-daemon -S -b -m \
+        -p $PID_FILE \
+        -x $PROG \
+        -c :ua3f-tproxy \
+        -- \
+        -port $port \
+        -ua "$ua" \
+        -loglevel $log_level
 
+    # 4. 告诉 procd PID 文件的位置，以便它可以正确地停止/重启
+    procd_set_param pidfile $PID_FILE
+    
     procd_set_param respawn
-    procd_set_param stdout 1 # 将日志输出到 logread
-    procd_set_param stderr 1 # 将日志输出到 logread
+    
 
-    # 4. 使用 GID 绕过流量
-    procd_set_param group $bypass_gid
+    procd_set_param stdout 1 
+    procd_set_param stderr 1 
 
     procd_close_instance
 }
 
 stop_service() {
-    # 5. 停止服务时自动清理防火墙
+    # 停止服务时自动清理防火墙
     unset_firewall
+    # procd 会自动使用 pidfile 停止 start-stop-daemon
 }
 
 service_triggers() {
