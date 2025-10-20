@@ -35,8 +35,7 @@ define Package/ua3f-tproxy/description
 endef
 
 define Build/Prepare
-	mkdir -p $(PKG_BUILD_DIR)/src
-	$(CP) $(CURDIR)/src/* $(PKG_BUILD_DIR)/src/
+	$(CP) $(CURDIR)/src/* $(PKG_BUILD_DIR)/
 	$(CP) $(CURDIR)/go.mod $(PKG_BUILD_DIR)/
 	$(CP) $(CURDIR)/go.sum $(PKG_BUILD_DIR)/
 	$(CP) $(CURDIR)/LICENSE $(PKG_BUILD_DIR)/
