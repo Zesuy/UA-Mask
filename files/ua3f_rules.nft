@@ -1,7 +1,5 @@
 chain ua3f_prerouting_after {
     type nat hook prerouting priority 1;
-
-    # 仅处理来自 LAN 接口 (br-lan)
     iifname "br-lan" \
     ip protocol tcp \
     # 豁免局域网、环回、保留地址
@@ -17,7 +15,6 @@ chain ua3f_prerouting_after {
 
 chain ua3f_output_after {
     type nat hook output priority -100;
-
     ip protocol tcp \
     # 豁免局域网、环回、保留地址
     ip daddr != { \

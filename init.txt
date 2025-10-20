@@ -1,3 +1,11 @@
 su -s /bin/ash nobody -c '"/root/ua3f-tproxy" -ua "fff" -port 8080 -loglevel debug  '
 compile
 $env:GOOS="linux"; $env:GOARCH="amd64"; go build -o ua3f-tproxy-linux src/main.go
+
+set uci firewall:
+config include 'ua3f_rules'
+	option type 'nftables'
+	option path '/etc/config/ua3f_rules.nft'
+	option enabled '1'
+
+move ua3f_rules to /etc/config/ua3f_rules.nft

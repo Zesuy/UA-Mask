@@ -1,0 +1,7 @@
+config 'ua3f-tproxy' 'enabled'
+	option enabled '0'
+
+config 'ua3f-tproxy' 'main'
+    option port '8080'
+    option ua 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    option log_level 'info'

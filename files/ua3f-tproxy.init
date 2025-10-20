@@ -1,0 +1,80 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=99
+STOP=90 # 确保在防火墙重载前停止
+
+NAME="ua3f-tproxy"
+PROG="/usr/bin/$NAME"
+FW_CONFIG_NAME="ua3f_tproxy" # 防火墙 UCI 规则的名称
+NFT_PATH="/etc/config/ua3f_rules.nft" # .nft 文件的路径
+
+# 自动管理防火墙规则
+set_firewall() {
+    uci -q delete firewall.${FW_CONFIG_NAME}
+    uci set firewall.${FW_CONFIG_NAME}="include"
+    uci set firewall.${FW_CONFIG_NAME}.type="nftables"
+    uci set firewall.${FW_CONFIG_NAME}.path="${NFT_PATH}"
+    uci set firewall.${FW_CONFIG_NAME}.enabled="1"
+    uci commit firewall
+    # 兼容 fw3 和 fw4
+    fw4 reload >/dev/null 2>&1 || fw3 reload >/dev/null 2>&1
+}
+
+# 自动清理防火墙规则
+unset_firewall() {
+    uci -q delete firewall.${FW_CONFIG_NAME}
+    uci commit firewall
+    fw4 reload >/dev/null 2>&1 || fw3 reload >/dev/null 2>&1
+}
+
+start_service() {
+    config_load "$NAME"
+
+    local enabled
+    config_get_bool enabled "enabled" "enabled" "0"
+    if [ "$enabled" -ne "1" ]; then
+        return 1
+    fi
+
+    # 1. 自动设置防火墙
+    set_firewall
+
+    local port
+    local ua
+    local log_level
+    
+    # 2. 读取新程序的配置
+    config_get port "main" "port" "8080"
+    config_get ua "main" "ua" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    config_get log_level "main" "log_level" "info"
+
+    procd_open_instance "$NAME"
+    procd_set_param command "$PROG"
+    
+    # 3. 传递新程序的命令行参数
+    procd_append_param command -port $port
+    procd_append_param command -ua "$ua"
+    procd_append_param command -loglevel $log_level
+
+    procd_set_param respawn
+    procd_set_param stdout 1 # 将日志输出到 logread
+    procd_set_param stderr 1 # 将日志输出到 logread
+
+    # 4. 保留您希望的 "OpenWrt" 方式
+    if id -u nobody >/dev/null 2>&1; then
+        procd_set_param user nobody
+    fi
+
+    procd_close_instance
+}
+
+stop_service() {
+    # 5. 停止服务时自动清理防火墙
+    unset_firewall
+}
+
+service_triggers() {
+    procd_add_reload_trigger "$NAME"
+    procd_add_reload_trigger "firewall" # 监听防火墙重载
+}
