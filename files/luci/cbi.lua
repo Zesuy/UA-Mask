@@ -42,6 +42,23 @@ log_level:value("panic")
 ua = main:taboption("general", Value, "ua", "User-Agent")
 ua.placeholder = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
+iface = main:taboption("general", Value, "iface", "Listen Interface(s)")
+iface.placeholder = "br-lan"
+iface.description = "指定一个或多个 LAN 接口，用空格分隔 (例如: 'br-lan' 或 'br-lan eth1')"
+
+bypass_gid = main:taboption("general", Value, "bypass_gid", "Bypass GID")
+bypass_gid.placeholder = "65533"
+bypass_gid.datatype = "uinteger"
+bypass_gid.description = "用于绕过TPROXY自身流量的GID。必须与 nft 规则中的 GID 匹配。"
+
+bypass_ports = main:taboption("general", Value, "bypass_ports", "Bypass Destination Ports")
+bypass_ports.placeholder = "22 443"
+bypass_ports.description = "豁免的目标端口，用空格分隔 (例如: '22 443')。"
+
+bypass_ips = main:taboption("general", Value, "bypass_ips", "Bypass Destination IPs")
+bypass_ips.placeholder = "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
+bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
+
 log = main:taboption("log", TextValue, "")
 log.readonly = true
 log.cfgvalue = function(self, section)

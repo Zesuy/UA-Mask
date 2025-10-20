@@ -11,6 +11,77 @@ NFT_PATH="/etc/config/ua3f_rules.nft" # .nft 文件的路径
 
 # 自动管理防火墙规则
 set_firewall() {
+    # 1. 从 UCI 读取配置
+    config_load "$NAME"
+    local port
+    local iface_list
+    local bypass_gid
+    local bypass_ports_list
+    local bypass_ips_list
+
+    config_get port "main" "port" "8080"
+    config_get iface_list "main" "iface" "br-lan"
+    config_get bypass_gid "main" "bypass_gid" "65533"
+    config_get bypass_ports_list "main" "bypass_ports" ""
+    config_get bypass_ips_list "main" "bypass_ips" ""
+
+    # 2. 格式化接口
+    local nft_ifaces
+    set -- $iface_list
+    if [ "$#" -eq 1 ]; then
+        nft_ifaces="\"$1\"" # 单个接口
+    else
+        nft_ifaces="{ $(echo "$iface_list" | sed -e 's/ /", "/g' -e 's/^/"/' -e 's/$/"/') }" # 多个接口
+    fi
+
+    # 3. 格式化豁免 IPs
+    local nft_ips_rule
+    if [ -n "$bypass_ips_list" ]; then
+        local nft_ips
+        nft_ips="{ $(echo "$bypass_ips_list" | sed -e 's/ /, /g') }"
+        nft_ips_rule="ip daddr != $nft_ips \\"
+    else
+        nft_ips_rule="# No bypass IPs configured"
+    fi
+
+    # 4. 格式化豁免 Ports
+    local nft_ports_rule
+    if [ -n "$bypass_ports_list" ]; then
+        local nft_ports
+        nft_ports="{ $(echo "$bypass_ports_list" | sed -e 's/ /, /g') }"
+        nft_ports_rule="tcp dport != $nft_ports \\"
+    else
+        nft_ports_rule="# No bypass ports configured"
+    fi
+
+    # 5. 动态写入 .nft 文件
+    cat > "${NFT_PATH}" << EOF
+chain ua3f_prerouting_after {
+    type nat hook prerouting priority 1;
+iifname $nft_ifaces \\
+    ip protocol tcp \\
+    # 豁免局域网、环回、保留地址等
+    $nft_ips_rule
+    # 豁免端口
+    $nft_ports_rule
+    redirect to :$port
+}
+
+chain ua3f_output_after {
+    type nat hook output priority -100;
+ip protocol tcp \\
+    # 豁免局域网、环回、保留地址等
+    $nft_ips_rule
+    # 豁免端口
+    $nft_ports_rule
+    # 豁免 ua3f-tproxy 自己的流量
+    meta skgid != $bypass_gid \\
+    redirect to :$port
+}
+
+EOF
+
+    # 6. 注册防火墙规则
     uci -q delete firewall.${FW_CONFIG_NAME}
     uci set firewall.${FW_CONFIG_NAME}="include"
     uci set firewall.${FW_CONFIG_NAME}.type="nftables"
@@ -18,14 +89,17 @@ set_firewall() {
     uci set firewall.${FW_CONFIG_NAME}.enabled="1"
     uci commit firewall
     # 兼容 fw3 和 fw4
-    fw4 reload >/dev/null 2>&1 || fw3 reload >/dev/null 2>&1
+    fw4 reload >/dev/null 2>&1 ||
+fw3 reload >/dev/null 2>&1
 }
 
 # 自动清理防火墙规则
 unset_firewall() {
+    rm -f "${NFT_PATH}" # 清理生成的规则文件
     uci -q delete firewall.${FW_CONFIG_NAME}
     uci commit firewall
-    fw4 reload >/dev/null 2>&1 || fw3 reload >/dev/null 2>&1
+    fw4 reload >/dev/null 2>&1 ||
+fw3 reload >/dev/null 2>&1
 }
 
 start_service() {
@@ -33,27 +107,31 @@ start_service() {
 
     local enabled
     config_get_bool enabled "enabled" "enabled" "0"
-    if [ "$enabled" -ne "1" ]; then
+    if [ "$enabled" -ne "1" ];
+then
         return 1
     fi
 
-    # 1. 自动设置防火墙
+    # 1. 自动设置防火墙 (现在动态生成)
     set_firewall
 
     local port
     local ua
     local log_level
+    local bypass_gid
     
     # 2. 读取新程序的配置
     config_get port "main" "port" "8080"
     config_get ua "main" "ua" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     config_get log_level "main" "log_level" "info"
+    config_get bypass_gid "main" "bypass_gid" "65533" # 读取 GID
 
     procd_open_instance "$NAME"
     procd_set_param command "$PROG"
     
     # 3. 传递新程序的命令行参数
-    procd_append_param command -port $port
+ 
+   procd_append_param command -port $port
     procd_append_param command -ua "$ua"
     procd_append_param command -loglevel $log_level
 
@@ -61,10 +139,8 @@ start_service() {
     procd_set_param stdout 1 # 将日志输出到 logread
     procd_set_param stderr 1 # 将日志输出到 logread
 
-    # 4. 保留您希望的 "OpenWrt" 方式
-    if id -u nobody >/dev/null 2>&1; then
-        procd_set_param user nobody
-    fi
+    # 4. 使用 GID 绕过流量
+    procd_set_param group $bypass_gid
 
     procd_close_instance
 }

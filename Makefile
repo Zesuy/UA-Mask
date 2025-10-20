@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 # 1. 修改包名和版本
 PKG_NAME:=ua3f-tproxy
-PKG_VERSION:=0.1.0
+PKG_VERSION:=0.1.1
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Zesuy <hongri580@gmail.com>
@@ -44,7 +44,6 @@ endef
 # 5. 修改 conffiles
 define Package/ua3f-tproxy/conffiles
 /etc/config/ua3f-tproxy
-/etc/config/ua3f_rules.nft
 endef
 
 # 6. 修改 install 步骤
@@ -58,7 +57,6 @@ define Package/ua3f-tproxy/install
 	$(INSTALL_DIR) $(1)/etc/config/
 	$(INSTALL_CONF) ./files/ua3f-tproxy.uci $(1)/etc/config/ua3f-tproxy
 	
-	$(INSTALL_CONF) ./files/ua3f_rules.nft $(1)/etc/config/ua3f_rules.nft
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi/
 	$(INSTALL_CONF) ./files/luci/cbi.lua $(1)/usr/lib/lua/luci/model/cbi/ua3f-tproxy.lua
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller/
