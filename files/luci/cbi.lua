@@ -47,7 +47,7 @@ iface.placeholder = "br-lan"
 iface.description = "指定一个或多个 LAN 接口，用空格分隔 (例如: 'br-lan' 或 'br-lan eth1')"
 
 bypass_gid = main:taboption("general", Value, "bypass_gid", "Bypass GID")
-bypass_gid.placeholder = "65533"
+bypass_gid.placeholder = "65534"
 bypass_gid.datatype = "uinteger"
 bypass_gid.description = "用于绕过TPROXY自身流量的GID。必须与 nft 规则中的 GID 匹配。"
 
@@ -69,7 +69,16 @@ log.rows = 30
 
 local apply = luci.http.formvalue("cbi.apply")
 if apply then
-    io.popen("/etc/init.d/ua3f-tproxy restart")
+    local enabled_form_value = luci.http.formvalue("cbid.ua3f-tproxy.enabled.enabled")
+
+    if enabled_form_value == "1" then
+        -- 修正：使用 luci.sys.call 异步执行，并重定向输出
+        -- 末尾的 '&' 符号是关键，它让命令在后台运行
+        luci.sys.call("/etc/init.d/ua3f-tproxy restart >/dev/null 2>&1 &")
+    else
+        -- 修正：使用 luci.sys.call 异步执行
+        luci.sys.call("/etc/init.d/ua3f-tproxy stop >/dev/null 2>&1 &")
+    end
 end
 
 return ua3f_tproxy

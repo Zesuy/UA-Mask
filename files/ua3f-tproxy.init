@@ -21,8 +21,9 @@ unset_firewall_rules() {
 unset_firewall() {
     unset_firewall_rules
     # 兼容 fw3 和 fw4
-    fw4 reload >/dev/null 2>&1 ||
-fw3 reload >/dev/null 2>&1
+    nft delete chain inet fw4 ua3f_prerouting_after 2>/dev/null || true
+    nft delete chain inet fw4 ua3f_output_after 2>/dev/null || true
+    fw4 reload >/dev/null 2>&1
 }
 
 # 自动管理防火墙规则
@@ -73,10 +74,11 @@ set_firewall() {
         nft_ports_rule="# No bypass ports configured"
     fi
 
-    # 6. 动态写入 .nft 文件
+# 6. 动态写入 .nft 文件
     cat > "${NFT_PATH}" << EOF
 chain ua3f_prerouting_after {
-    type nat hook prerouting priority 1;
+    # 优先级必须低于 OpenClash (dstnat / -100)，例如 -101
+    type nat hook prerouting priority dstnat - 1;
     iifname $nft_ifaces \\
     ip protocol tcp \\
     # 豁免局域网、环回、保留地址等
@@ -93,10 +95,13 @@ chain ua3f_output_after {
     $nft_ips_rule
     # 豁免端口
     $nft_ports_rule
-    # 豁免 ua3f-tproxy 自己的流量
-    meta skgid != $bypass_gid \\
+    # 豁免 ua3f-tproxy 自己的流量 
+    # 同时豁免 OpenClash 的流量 (GID 65534)，防止循环
+    meta skgid != { $bypass_gid, 65534 } \\
     redirect to :$port
 }
+
+EOF
 
 EOF
 
@@ -107,8 +112,10 @@ EOF
     uci set firewall.${FW_CONFIG_NAME}.enabled="1"
     uci commit firewall
     # 兼容 fw3 和 fw4
-    fw4 reload >/dev/null 2>&1 ||
-fw3 reload >/dev/null 2>&1
+    nft delete chain inet fw4 ua3f_prerouting_after 2>/dev/null || true
+    nft delete chain inet fw4 ua3f_output_after 2>/dev/null || true
+    fw4 reload >/dev/null 2>&1
+
 }
 
 # 检查并创建专用组
@@ -148,15 +155,11 @@ start_service() {
 
     procd_open_instance "$NAME"
     
-    procd_set_param command start-stop-daemon -S -b -m \
-        -p $PID_FILE \
-        -x $PROG \
-        -c :ua3f-tproxy \
-        -- \
+    procd_set_param command $PROG \
         -port $port \
         -ua "$ua" \
         -loglevel $log_level
-
+    procd_set_param group "ua3f-tproxy"
     # 4. 告诉 procd PID 文件的位置，以便它可以正确地停止/重启
     procd_set_param pidfile $PID_FILE
     
