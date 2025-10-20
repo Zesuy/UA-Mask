@@ -10,8 +10,9 @@ import (
 	"io"
 	"net"
 	"strings"
-	"unsafe"
 	"time"
+	"unsafe"
+
 	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -57,7 +58,7 @@ func main() {
 		FullTimestamp: true,
 	})
 	cache = expirable.NewLRU[string, string](300, nil, time.Second*600)
-	
+
 	// 打印配置信息
 	logrus.Infof("UA3F-TPROXY v%s", version)
 	logrus.Infof("Port: %d", port)
@@ -226,7 +227,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	}
 
 	logrus.Debugf("[%s] HTTP detected, processing with streaming parser...", destAddrPort)
-	
+
 	uaFound := false // 标记是否找到了 UA
 
 	// 2. 开始逐行扫描 HTTP Headers
@@ -250,7 +251,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				logrus.Debugf("[%s] No User-Agent header, skip modification. Adding to LRU cache.", destAddrPort)
 				cache.Add(destAddrPort, destAddrPort)
 			}
-			
+
 			// 将 Header 的结尾（空行）写入目标
 			if _, err = io.WriteString(dst, line); err != nil {
 				logrus.Errorf("[%s] Write header end error: %v", destAddrPort, err)
@@ -291,7 +292,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			} else {
 				// 不在白名单，执行修改
 				logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
-				
+
 				// 构造新行，同时必须保留原始的行尾 (CRLF 或 LF)
 				var newLine string
 				if strings.HasSuffix(line, "\r\n") {
@@ -299,7 +300,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				} else {
 					newLine = fmt.Sprintf("User-Agent: %s\n", userAgent)
 				}
-				
+
 				// 写入修改后的行
 				if _, err = io.WriteString(dst, newLine); err != nil {
 					logrus.Errorf("[%s] Write modified UA line error: %v", destAddrPort, err)
