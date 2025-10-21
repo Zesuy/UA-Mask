@@ -13,6 +13,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/dlclark/regexp2"
 	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -25,6 +26,8 @@ var (
 	logLevel    string
 	showVer     bool
 	cache       *expirable.LRU[string, string]
+	uaPattern   string
+	uaRegexp    *regexp2.Regexp
 	HTTP_METHOD = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
 	whitelist   = []string{
 		"MicroMessenger Client",
@@ -39,8 +42,15 @@ func main() {
 	flag.IntVar(&port, "port", 8080, "TPROXY listen port")
 	flag.StringVar(&logLevel, "loglevel", "info", "Log level (debug, info, warn, error)")
 	flag.BoolVar(&showVer, "v", false, "Show version")
+	flag.StringVar(&uaPattern, "r", "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)", "UA-Pattern (Regex)")
 	flag.Parse()
-
+	// 编译 UA 正则表达式
+	uaPattern = "(?i)" + uaPattern
+	var err error
+	uaRegexp, err = regexp2.Compile(uaPattern, regexp2.None)
+	if err != nil {
+		logrus.Fatalf("Invalid User-Agent Regex Pattern: %v", err)
+	}
 	// 显示版本
 	if showVer {
 		fmt.Printf("UA3F-TPROXY v%s\n", version)
@@ -175,7 +185,7 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 		return nil, fmt.Errorf("getsockopt SO_ORIGINAL_DST failed: %v", errno)
 	}
 
-	// 解析 IPv4 地址和端口 (网络字节序)
+	// 解析 IPv4 地址和端口
 	ip := net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
 	port := int(addr.Port>>8 | addr.Port<<8)
 	logrus.Debugf("getOriginalDst raw value: %d, parsed port: %d", addr.Port, port)
@@ -207,11 +217,11 @@ func isHTTP(reader *bufio.Reader) (bool, error) {
 	return is_http, nil
 }
 
-// 修改 User-Agent 并转发数据 (高性能流式版本)
+// 修改 User-Agent 并转发数据
 func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	srcReader := bufio.NewReader(src)
 
-	// 1. 检查是否是 HTTP 请求 (这个检查仍然是必要的)
+	// 1. 检查是否是 HTTP 请求
 	is_http, err := isHTTP(srcReader)
 	if err != nil {
 		if strings.Contains(err.Error(), "use of closed network connection") {
@@ -258,15 +268,13 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				return
 			}
 
-			// 5. 【关键】快速转发剩余所有数据
-			// 这会转发请求体 (Request Body) 以及此 TCP 连接上
-			// 后续所有的 Keep-Alive 请求，不再进行任何解析。
+			// 5.快速转发剩余所有数据
 			logrus.Debugf("[%s] Header end, starting fast relay (io.Copy)", destAddrPort)
 			io.Copy(dst, srcReader)
 			return // 此连接处理完毕
 		}
 
-		// 6. 检查是否是 User-Agent 行 (高性能、不区分大小写)
+		// 6. 检查是否是 User-Agent 行
 		if len(line) > 11 && strings.EqualFold(line[:11], "user-agent:") {
 			uaFound = true
 			// 提取 UA 字符串
@@ -281,16 +289,17 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				}
 			}
 
-			if isInWhiteList {
-				logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. Adding to LRU cache.", destAddrPort, uaStr)
-				cache.Add(destAddrPort, destAddrPort)
-				// 白名单，写入原始行
-				if _, err = io.WriteString(dst, line); err != nil {
-					logrus.Errorf("[%s] Write original UA line error: %v", destAddrPort, err)
-					return
+			isMatchUaPattern := true // 默认为 true
+			if uaRegexp != nil {     // uaRegexp 必须在 main 函数中初始化
+				var err error
+				isMatchUaPattern, err = uaRegexp.MatchString(uaStr)
+				if err != nil {
+					logrus.Errorf("[%s] User-Agent Regex Pattern Match Error: %v", destAddrPort, err)
+					isMatchUaPattern = true // 如果匹配出错，假定匹配成功
 				}
-			} else {
-				// 不在白名单，执行修改
+			}
+
+			if !isInWhiteList && isMatchUaPattern {
 				logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
 
 				// 构造新行，同时必须保留原始的行尾 (CRLF 或 LF)
@@ -307,6 +316,22 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 					return
 				}
 				logrus.Infof("[%s] UA modified: %s -> %s", destAddrPort, uaStr, userAgent)
+			} else {
+				// 不替换 (原因：在白名单中 或 未匹配UA模式)
+				if isInWhiteList {
+					logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. Adding to LRU cache.", destAddrPort, uaStr)
+				} else { // 意味着 !isMatchUaPattern
+					logrus.Debugf("[%s] Not Hit User-Agent Pattern: %s. Adding to LRU cache.", destAddrPort, uaStr)
+				}
+
+				// 将此目标地址加入缓存，因为我们已确定不修改它
+				cache.Add(destAddrPort, destAddrPort)
+
+				// 写入原始行
+				if _, err = io.WriteString(dst, line); err != nil {
+					logrus.Errorf("[%s] Write original UA line error: %v", destAddrPort, err)
+					return
+				}
 			}
 		} else {
 			// 7. 不是 UA 行，也不是空行，说明是其他 Header，原样写入

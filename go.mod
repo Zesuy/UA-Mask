@@ -8,3 +8,5 @@ require (
 )
 
 require github.com/hashicorp/golang-lru/v2 v2.0.7
+
+require github.com/dlclark/regexp2 v1.11.5 // indirect
