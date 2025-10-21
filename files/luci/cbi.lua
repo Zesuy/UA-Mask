@@ -3,7 +3,7 @@ local uci = require("luci.model.uci").cursor()
 ua3f_tproxy = Map("ua3f-tproxy",
     "UA3F 透明代理",
     [[
-        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.1.1</a>
+        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.1.3</a>
         <br>
         用于修改 User-Agent 的透明代理。
     ]]

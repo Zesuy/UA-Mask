@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 # 1. 修改包名和版本
 PKG_NAME:=ua3f-tproxy
-PKG_VERSION:=0.1.2
+PKG_VERSION:=0.1.3
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Zesuy <hongri580@gmail.com>
@@ -27,7 +27,7 @@ define Package/ua3f-tproxy
 	SUBMENU:=Web Servers/Proxies
 	TITLE:=A transparent proxy for changing User-Agent
 	URL:=https://github.com/Zesuy/UA3F-tproxy
-	DEPENDS:=$(GO_ARCH_DEPENDS) +luci-compat +firewall4
+	DEPENDS:=$(GO_ARCH_DEPENDS) +luci-compat +firewall4 +kmod-nft-tproxy
 endef
 
 define Package/ua3f-tproxy/description
