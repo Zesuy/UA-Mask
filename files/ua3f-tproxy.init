@@ -39,7 +39,7 @@ set_firewall() {
     local bypass_ports_list
     local bypass_ips_list
 
-    config_get port "main" "port" "8080"
+    config_get port "main" "port" "12032"
     config_get iface_list "main" "iface" "br-lan"
     config_get bypass_gid "main" "bypass_gid" "65533"
     config_get bypass_ports_list "main" "bypass_ports" ""
@@ -149,7 +149,7 @@ start_service() {
     local ua
     local log_level
     
-    config_get port "main" "port" "8080"
+    config_get port "main" "port" "12032"
     config_get ua "main" "ua" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     config_get log_level "main" "log_level" "info"
 

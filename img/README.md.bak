@@ -1,0 +1,33 @@
+## UA3F-TProxy
+
+UA3F-tproxy是基于 [UA3F](https://github.com/SunBK201/UA3F) 重构的，使用REDIRECT方法防火墙重定向 本机与LAN流量 到端口的 高性能UA修改应用/luci-app。
+在校园网多设备检测的道路上，有ua2f,ua3f两个前者。但ua2f需要核心功能支持，需要固件编译。ua3f严重依赖于clash等代理服务做转发，流量经过两次代理，性能和内存占用较高，不适用于低性能，少内存的硬路由。
+
+基于此，我开发了ua3f-tproxy。这是一个一站式的ua修改应用，只需要进入服务/ua3f tproxy/勾选启用，保存应用。boom,配置完成！
+
+![ua3f-tproxy](./img/)
+
+
+## 兼容性
+ua3f-tproxy使用openwrt v23.05构建，依赖于nftables。
+
+ua3f-tproxy使用防火墙转发，当前测试可以在openwrt v23.05版本与：mwan3, openclash,sqm_qos,正常共存使用。
+
+注意：ua3f-tproxy特殊配置绕过了openclash输出的gid 65534以优化共存。若使用Passwall等其他防火墙转发代理服务，**后果未知**
+
+## 性能优化：
+
+### 架构优化
+相比于socks5版的lan-> 全部进入clash核心->SOCKS连接到 ua3f -> OUTPUT
+
+tproxy版本的数据流为 LAN- > ua3f-tproxy -> openclash核心 / openclash国内域名绕过 -> OUTPUT
+
+对ua3f-tproxy来说，openclash不是必须的。相比于clash+ua3f的组合来说，数据流向简化，大部分国内下载流量不必再经过clash核心（开启国内绕过），预计提升 **50%** 性能。
+在不使用clash的情况下，相较于clash+ua3f，预计内存占用 减少至 **数MB**（clash通常需要80mb以上）
+
+### 解析优化：
+
+使用流式解析从头寻找user-agent字段，一旦找到，解析修改该字段后面的字段。再往后的请求头全部io.copy。省去了解析http头的内存于性能开销。
+
+
+

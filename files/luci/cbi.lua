@@ -28,7 +28,7 @@ main:tab("general", "常规设置")
 main:tab("log", "日志")
 
 port = main:taboption("general", Value, "port", "端口")
-port.placeholder = "8080"
+port.placeholder = "12032"
 port.datatype = "port"
 
 log_level = main:taboption("general", ListValue, "log_level", "日志等级")
@@ -44,12 +44,12 @@ ua.placeholder = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 iface = main:taboption("general", Value, "iface", "监听接口")
 iface.placeholder = "br-lan"
-iface.description = "指定一个或多个 LAN 接口，用空格分隔 (如: 'br-lan' 或 'br-lan eth1')"
+iface.description = "指定一个或多个 LAN 接口，用空格分隔 (如: 'br-lan' 或 'br-lan eth1'),如果出问题会导致环路卡死！"
 
 bypass_gid = main:taboption("general", Value, "bypass_gid", "绕过 GID")
 bypass_gid.placeholder = "65534"
 bypass_gid.datatype = "uinteger"
-bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。必须与 nft 规则中的 GID 匹配。"
+bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。如果不知道是什么请保持默认"
 
 bypass_ports = main:taboption("general", Value, "bypass_ports", "绕过目标端口")
 bypass_ports.placeholder = "22 443"
