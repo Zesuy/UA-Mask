@@ -151,7 +151,7 @@ start_service() {
     
     config_get port "main" "port" "12032"
     config_get ua "main" "ua" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    config_get log_level "main" "log_level" "info"
+    config_get log_level "main" "log_level" "debug"
 
     procd_open_instance "$NAME"
     

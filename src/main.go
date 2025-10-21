@@ -202,7 +202,7 @@ func isHTTP(reader *bufio.Reader) (bool, error) {
 		if strings.Contains(err.Error(), "EOF") {
 			logrus.Debug(fmt.Sprintf("Peek EOF: %s", err.Error()))
 		} else {
-			logrus.Error(fmt.Sprintf("Peek error: %s", err.Error()))
+			logrus.Debug(fmt.Sprintf("Peek error: %s", err.Error()))
 		}
 		return false, err
 	}
@@ -315,7 +315,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 					logrus.Errorf("[%s] Write modified UA line error: %v", destAddrPort, err)
 					return
 				}
-				logrus.Infof("[%s] UA modified: %s -> %s", destAddrPort, uaStr, userAgent)
+				logrus.Debugf("[%s] UA modified: %s -> %s", destAddrPort, uaStr, userAgent)
 			} else {
 				// 不替换 (原因：在白名单中 或 未匹配UA模式)
 				if isInWhiteList {

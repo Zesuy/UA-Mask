@@ -38,6 +38,7 @@ log_level:value("warn", "警告(warn)")
 log_level:value("error", "错误(error)")
 log_level:value("fatal", "致命(fatal)")
 log_level:value("panic", "崩溃(panic)")
+log_level.description = "设置日志的详细程度。默认为debug用于确认一切正常工作，平时可以改为info"
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
 ua.placeholder = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
