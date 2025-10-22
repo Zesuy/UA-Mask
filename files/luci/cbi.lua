@@ -1,11 +1,14 @@
 local uci = require("luci.model.uci").cursor()
 
 ua3f_tproxy = Map("ua3f-tproxy",
-    "UA3F 透明代理",
+    "UA3F-TPROXY",
     [[
-        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.1.3</a>
+        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.1.5</a>
         <br>
-        用于修改 User-Agent 的透明代理。
+        用于修改 User-Agent 的透明代理,使用 TPROXY 技术实现。
+        默认情况下把设备标识的 User-Agent 替换为FFF，以防止被识别和限速。
+        请谨慎与其他 TPROXY 服务同时使用，可能会导致冲突和环路。
+        </br>
     ]]
 )
 
@@ -38,7 +41,6 @@ log_level:value("warn", "警告(warn)")
 log_level:value("error", "错误(error)")
 log_level:value("fatal", "致命(fatal)")
 log_level:value("panic", "崩溃(panic)")
-log_level.description = "设置日志的详细程度。默认为debug用于确认一切正常工作，平时可以改为info"
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
 ua.placeholder = "FFF"
@@ -50,7 +52,7 @@ iface.description = "指定一个或多个 LAN 接口，用空格分隔 (如: 'b
 bypass_gid = main:taboption("general", Value, "bypass_gid", "绕过 GID")
 bypass_gid.placeholder = "65533"
 bypass_gid.datatype = "uinteger"
-bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。如果不知道是什么请保持默认"
+bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。"
 
 force_replace = main:taboption("general", Flag, "force_replace", "强制修改 User-Agent")
 force_replace.description = "启用后将忽略白名单和正则，强制修改所有流量的 User-Agent。如果不启用，则只修改含设备标识的 User-Agent。如果正常使用依旧掉线，请尝试启用此选项。"
