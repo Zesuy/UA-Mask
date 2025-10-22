@@ -6,9 +6,10 @@ ua3f_tproxy = Map("ua3f-tproxy",
         <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.1.5</a>
         <br>
         用于修改 User-Agent 的透明代理,使用 TPROXY 技术实现。
-        默认情况下把设备标识的 User-Agent 替换为FFF，以防止被识别和限速。
+        <br>
         请谨慎与其他 TPROXY 服务同时使用，可能会导致冲突和环路。
-        </br>
+        <br>
+        在默认情况下，不会修改全部的UA，而是只修改正则匹配到的(包含设备名称的)UA,其余不含设备名的UA(steam,pcdn等)不做处理
     ]]
 )
 
@@ -28,9 +29,12 @@ status.cfgvalue = function(self, section)
 end
 
 main:tab("general", "常规设置")
+main:tab("network", "网络与防火墙")
 main:tab("log", "日志")
 
-port = main:taboption("general", Value, "port", "端口")
+
+-- === Tab 1: 常规设置 (UA 相关) ===
+port = main:taboption("general", Value, "port", "监听端口")
 port.placeholder = "12032"
 port.datatype = "port"
 
@@ -44,38 +48,46 @@ log_level:value("panic", "崩溃(panic)")
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
 ua.placeholder = "FFF"
+ua.description = "用于替换设备标识的 User-Agent 字符串，当部分替换启用时，用当前值替换匹配到的部分。"
 
-iface = main:taboption("general", Value, "iface", "监听接口")
+force_replace = main:taboption("general", Flag, "force_replace", "强制修改UA")
+force_replace.description = "启用后将忽略正则，强制修改所有流量的 User-Agent。如果正常使用依旧掉线，请尝试启用此选项。"
+
+partialRepalce = main:taboption("general", Flag, "partial_replace", "部分替换UA")
+partialRepalce.description ="是否仅替换匹配到的正则部分，而非整个 User-Agent 字符串。"
+partialRepalce.default = "0"
+
+uaRegexPattern = main:taboption("general", Value, "ua_regex", "UA匹配正则")
+uaRegexPattern.placeholder = "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)"
+uaRegexPattern.description = "当不使用强制替换时，用于匹配 User-Agent 的正则表达式"
+
+
+-- === Tab 2: 网络与防火墙 (网络、日志等级、防火墙相关) ===
+
+
+
+iface = main:taboption("network", Value, "iface", "监听接口")
 iface.placeholder = "br-lan"
-iface.description = "指定一个或多个 LAN 接口，用空格分隔 (如: 'br-lan' 或 'br-lan eth1'),如果出问题会导致环路卡死！"
+iface.description = "指定监听的lan口"
 
-bypass_gid = main:taboption("general", Value, "bypass_gid", "绕过 GID")
+bypass_gid = main:taboption("network", Value, "bypass_gid", "绕过 GID")
 bypass_gid.placeholder = "65533"
 bypass_gid.datatype = "uinteger"
 bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。"
 
-proxy_host = main:taboption("general", Flag, "proxy_host", "代理主机流量")
-proxy_host.description = "启用后将代理主机自身的流量。如果需要尝试与其他代理服务共存可尝试开启"
+proxy_host = main:taboption("network", Flag, "proxy_host", "代理主机流量")
+proxy_host.description = "启用后将代理主机自身的流量。如果需要尽量避免和其他代理冲突，请禁用此选项。"
 
-force_replace = main:taboption("general", Flag, "force_replace", "强制修改 User-Agent")
-force_replace.description = "启用后将忽略白名单和正则，强制修改所有流量的 User-Agent。如果不启用，则只修改含设备标识的 User-Agent。如果正常使用依旧掉线，请尝试启用此选项。"
-
-bypass_ports = main:taboption("general", Value, "bypass_ports", "绕过目标端口")
+bypass_ports = main:taboption("network", Value, "bypass_ports", "绕过目标端口")
 bypass_ports.placeholder = "22 443"
 bypass_ports.description = "豁免的目标端口，用空格分隔 (如: '22 443')。"
 
-bypass_ips = main:taboption("general", Value, "bypass_ips", "绕过目标 IP")
+bypass_ips = main:taboption("network", Value, "bypass_ips", "绕过目标 IP")
 bypass_ips.placeholder = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
 bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 
-uaRegexPattern = main:taboption("general", Value, "ua_regex", "ua 正则表达式模式")
-uaRegexPattern.placeholder = "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)"
-uaRegexPattern.description = "当不使用强制替换时，用于匹配 User-Agent 的正则表达式模式"
 
-partialRepalce = main:taboption("general", Flag, "partial_replace", "Partial Replace")
-partialRepalce.description =
-"仅替换匹配到的 User-Agent 部分，仅在 ua_regex 不为空时生效"
-partialRepalce.default = "0"
+-- === Tab 3: 日志 ===
 
 log = main:taboption("log", TextValue, "")
 log.readonly = true
@@ -84,6 +96,9 @@ log.cfgvalue = function(self, section)
     return luci.sys.exec("logread -e ua3f-tproxy")
 end
 log.rows = 30
+
+
+-- === Apply/Restart 逻辑 (保持不变) ===
 
 local apply = luci.http.formvalue("cbi.apply")
 if apply then
