@@ -41,12 +41,14 @@ set_firewall() {
     local bypass_ports_list
     local bypass_ips_list
     local force_replace
+    local proxy_host
 
     config_get port "main" "port" "12032"
     config_get iface_list "main" "iface" "br-lan"
     config_get bypass_gid "main" "bypass_gid" "65533"
     config_get bypass_ports_list "main" "bypass_ports" ""
     config_get bypass_ips_list "main" "bypass_ips" ""
+    config_get_bool proxy_host "main" "proxy_host" ""
 
     # 3. 格式化接口
     local nft_ifaces
@@ -78,11 +80,12 @@ set_firewall() {
     fi
 
 # 6. 动态写入 .nft 文件
+    # <-- [修改] 先只写入 prerouting 链
     cat > "${NFT_PATH}" << EOF
 chain ua3f_prerouting_after {
     # 优先级必须低于 OpenClash (dstnat / -100)，例如 -101
     type nat hook prerouting priority dstnat - 1;
-    iifname $nft_ifaces \\
+iifname $nft_ifaces \\
     ip protocol tcp \\
     # 豁免局域网、环回、保留地址等
     $nft_ips_rule
@@ -91,9 +94,13 @@ chain ua3f_prerouting_after {
     redirect to :$port
 }
 
+EOF
+
+    if [ "$proxy_host" = "1" ]; then
+        cat >> "${NFT_PATH}" << EOF
 chain ua3f_output_after {
     type nat hook output priority -100;
-    ip protocol tcp \\
+ip protocol tcp \\
     # 豁免局域网、环回、保留地址等
     $nft_ips_rule
     # 豁免端口
@@ -105,6 +112,10 @@ chain ua3f_output_after {
 }
 
 EOF
+        logger -t "$NAME" "proxy_host is enabled. Added ua3f_output_after chain."
+    else
+        logger -t "$NAME" "proxy_host is disabled. Skipping ua3f_output_after chain."
+    fi
     logger -t "$NAME" "Generated nftables rules at ${NFT_PATH}"
     # 7. 注册防火墙规则
     uci set firewall.${FW_CONFIG_NAME}="include"
@@ -141,9 +152,13 @@ start_service() {
         return 1
     fi
 
-    # 1. 确保组存在
-    setup_group
+    local proxy_host
+    config_get_bool proxy_host "main" "proxy_host" "1"
 
+    if [ "$proxy_host" = "1" ]; then
+        # 1. 启用代理本机时确保组存在
+        setup_group 
+    fi
     # 2. 读取 procd 启动所需的配置
     local port
     local ua
@@ -161,7 +176,13 @@ start_service() {
     procd_set_param command "$PROG"
 
     # 5. 使用 append_param 逐个添加参数
-    procd_set_param group "ua3f-tproxy" 
+    if [ "$proxy_host" = "1" ]; then
+        # <-- [修改] 仅当 proxy_host 启用时，才以特定组运行
+        procd_set_param group "ua3f-tproxy" 
+        logger -t "$NAME" "Running as group 'ua3f-tproxy' for host proxying."
+    else
+        logger -t "$NAME" "Running as default user (proxy_host is disabled)."
+    fi
     procd_append_param command -port "$port"
     procd_append_param command -ua "$ua"
     procd_append_param command -loglevel "$log_level"

@@ -54,6 +54,9 @@ bypass_gid.placeholder = "65533"
 bypass_gid.datatype = "uinteger"
 bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。"
 
+proxy_host = main:taboption("general", Flag, "proxy_host", "代理主机流量")
+proxy_host.description = "启用后将代理主机自身的流量。如果需要尝试与其他代理服务共存可尝试开启"
+
 force_replace = main:taboption("general", Flag, "force_replace", "强制修改 User-Agent")
 force_replace.description = "启用后将忽略白名单和正则，强制修改所有流量的 User-Agent。如果不启用，则只修改含设备标识的 User-Agent。如果正常使用依旧掉线，请尝试启用此选项。"
 
