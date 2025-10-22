@@ -74,9 +74,9 @@ if apply then
 
     if enabled_form_value == "1" then
         -- 使用 luci.sys.call 异步执行，并重定向输出
-        luci.sys.call("/etc/init.d/ua3f-tproxy restart >/dev/null 2>&1 &")
+        luci.sys.call("/etc/init.d/ua3f-tproxy restart >/dev/null 2>&1")
     else
-        luci.sys.call("/etc/init.d/ua3f-tproxy stop >/dev/null 2>&1 &")
+        luci.sys.call("/etc/init.d/ua3f-tproxy stop >/dev/null 2>&1")
     end
 end
 
