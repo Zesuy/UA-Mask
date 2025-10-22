@@ -27,16 +27,17 @@
 
 `ua3f-tproxy` 极大地优化了流量处理路径。
 
-  * **原版 ua3f (Socks5 方案)**:
+  * ** ua3f (Socks5 方案)**:
+      * 所有流量（包括国内）都必须经过Clash，性能损失大。
+      ![ua3f.png](./img/ua3f.png)
 
-      * 流程: `LAN -> Clash 核心 -> SOCKS5 连接到 ua3f -> OUTPUT`
-      * 痛点: 所有流量（包括国内）都必须经过Clash，性能损失大。
-
-  * **本项目 (TProxy 方案)**:
-
-      * 流程: `LAN -> ua3f-tproxy -> [Clash 核心 / 或 / 国内直连]`
+  * ** ua3f-tproxy (TProxy 方案)**:
+    * ua3f-tproxy + openclash
+    ![ua3f-tproxy_and_openclash.png](./img/ua3f-tproxy_and_openclash.png)
       * 优势: `ua3f-tproxy` 先处理流量。国内流量可不再经过 Clash 核心，预计提升 **50%** 性能。
-
+    * ua3f-tproxy 
+    ![ua3f-tproxy](./img/ua3f-tproxy_only.png)
+      *单纯的ua3f-tproxy,无需依赖openclash即可修改ua。
 ## 安装
 
 我们提供两种安装方式：
@@ -88,3 +89,28 @@
   * **立即修改**: 一旦找到该字段，立即对其进行解析和修改。
   * **直接复制**: 该字段之后的所有请求头数据，全部通过 `io.copy` 直接转发，省去了完整解析 HTTP 头的内存与性能开销。
 
+## 防火墙路线
+防火墙详情
+* ua3f_prerouting_after使用了dsnat-1来保证比openclash更先获取流量
+* ua3f_output_after用来代理本机流量，使用特殊的gid来绕过openclash发出的流量。
+```mermaid
+graph TD
+    subgraph "Prerouting 阶段"
+        A[LAN 流量] --> B{ua3f_prerouting_after};
+        B -- "TCP 端口 != 22, 443" --> C[REDIRECT ua3f 端口 12032];
+        B -- "TCP 22/443, UDP" --> D{dstnat 链};
+        D -- "TCP 流量 如 443" --> F{openclash 链};
+        D -- "其他流量 如 UDP" --> G[直接 FORWARD];
+        F -- "目标: @china_ip_route" --> H[RETURN FORWARD];
+        F -- "其他 TCP" --> I[REDIRECT openclash 端口 7892];
+    end
+
+    subgraph "路由器处理与转发"
+        C --> J[ua3f 服务 INPUT];
+        I --> L[openclash 服务 INPUT];
+        J -- "ua3f 处理后" --> M[本地 OUTPUT -> srcnat -> WAN];
+        L -- "clash 处理后" --> M;
+        G --> N[转发 FORWARD -> srcnat -> WAN];
+        H --> N;
+    end
+```
