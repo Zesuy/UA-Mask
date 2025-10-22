@@ -47,13 +47,6 @@ set_firewall() {
     config_get bypass_gid "main" "bypass_gid" "65533"
     config_get bypass_ports_list "main" "bypass_ports" ""
     config_get bypass_ips_list "main" "bypass_ips" ""
-    config_get force_replace "main" "force_replace" "0"
-    
-    if [ "$force_replace" -eq "1" ]; then
-        force_replace=true
-    else
-        force_replace=false
-    fi
 
     # 3. 格式化接口
     local nft_ifaces
@@ -159,24 +152,37 @@ start_service() {
     config_get port "main" "port" "12032"
     config_get ua "main" "ua" "FFF"
     config_get log_level "main" "log_level" "debug"
+    config_get ua_regex "main" "ua_regex" "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
+    config_get_bool force_replace "main" "force_replace" 0
+    config_get_bool partial_replace "main" "partial_replace" 0
 
+    # 4. 启动 procd 实例
     procd_open_instance "$NAME"
-    logger -t "$NAME" "Starting $NAME on port $port with log level $log_level"
-    
-    procd_set_param command $PROG \
-        -port $port \
-        -ua "$ua" \
-        -loglevel $log_level \
-        -force $force_replace
-    procd_set_param group "ua3f-tproxy"
-    # 4. 告诉 procd PID 文件的位置，以便它可以正确地停止/重启
-    procd_set_param pidfile $PID_FILE
-    
-    procd_set_param respawn
-    
+    procd_set_param command "$PROG"
 
-    procd_set_param stdout 1 
-    procd_set_param stderr 1 
+    # 5. 使用 append_param 逐个添加参数
+    procd_set_param group "ua3f-tproxy" 
+    procd_append_param command -port "$port"
+    procd_append_param command -ua "$ua"
+    procd_append_param command -loglevel "$log_level"
+    procd_append_param command -r "$ua_regex"
+
+    if [ "$force_replace" = "1" ]; then
+        # 如果启用，则忽略 -s 标志，因为 Go 程序会优先使用 -force
+        procd_append_param command -force
+        logger -t "$NAME" "Starting with -force enabled. Partial replace (-s) will be ignored."
+    elif [ "$partial_replace" = "1" ]; then
+        # 仅在 -force 未启用时，才添加 -s 标志
+        procd_append_param command -s
+        logger -t "$NAME" "Starting with partial replace (-s) enabled."
+    else
+        logger -t "$NAME" "Starting with default (full) replace mode."
+    fi
+
+    # 7. 设置其他 procd 参数
+    procd_set_param respawn    
+    procd_set_param stdout 1   
+    procd_set_param stderr 1  
 
     procd_close_instance
     # 5. 启动后自动设置防火墙

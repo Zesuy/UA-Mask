@@ -20,17 +20,18 @@ import (
 )
 
 var (
-	version       = "0.1.0"
-	userAgent     string
-	port          int
-	logLevel      string
-	showVer       bool
-	force_replace bool
-	cache         *expirable.LRU[string, string]
-	uaPattern     string
-	uaRegexp      *regexp2.Regexp
-	HTTP_METHOD   = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
-	whitelist     = []string{
+	version              = "0.1.0"
+	userAgent            string
+	port                 int
+	logLevel             string
+	showVer              bool
+	force_replace        bool
+	enablePartialReplace bool
+	cache                *expirable.LRU[string, string]
+	uaPattern            string
+	uaRegexp             *regexp2.Regexp
+	HTTP_METHOD          = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
+	whitelist            = []string{
 		"MicroMessenger Client",
 		"ByteDancePcdn",
 		"Go-http-client/1.1",
@@ -44,6 +45,7 @@ func main() {
 	flag.StringVar(&logLevel, "loglevel", "info", "Log level (debug, info, warn, error)")
 	flag.BoolVar(&showVer, "v", false, "Show version")
 	flag.BoolVar(&force_replace, "force", false, "Force replace User-Agent, ignore whitelist and regex pattern")
+	flag.BoolVar(&enablePartialReplace, "s", false, "Enable Regex Partial Replace")
 	flag.StringVar(&uaPattern, "r", "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)", "UA-Pattern (Regex)")
 	flag.Parse()
 	// 编译 UA 正则表达式
@@ -75,6 +77,8 @@ func main() {
 	logrus.Infof("UA3F-TPROXY v%s", version)
 	logrus.Infof("Port: %d", port)
 	logrus.Infof("User-Agent: %s", userAgent)
+	logrus.Infof("User-Agent Regex Pattern: %s", uaPattern)
+	logrus.Infof("Enable Partial Replace: %v", enablePartialReplace)
 	logrus.Infof("Log level: %s", logLevel)
 
 	// 监听端口
@@ -219,6 +223,21 @@ func isHTTP(reader *bufio.Reader) (bool, error) {
 	return is_http, nil
 }
 
+// buildNewUA 根据是否启用部分替换来构造新的 User-Agent 字符串
+func buildNewUA(originUA string, replacementUA string, uaRegexp *regexp2.Regexp, enablePartialReplace bool) string {
+	if enablePartialReplace && uaRegexp != nil {
+		// 启用部分替换：使用正则替换
+		newUaHearder, err := uaRegexp.Replace(originUA, replacementUA, -1, -1)
+		if err != nil {
+			logrus.Error(fmt.Sprintf("User-Agent Replace Error: %s", err.Error()))
+			return replacementUA // 替换出错时，回退到完整替换
+		}
+		return newUaHearder
+	}
+	// 默认完整替换
+	return replacementUA
+}
+
 // 修改 User-Agent 并转发数据
 func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	srcReader := bufio.NewReader(src)
@@ -324,12 +343,17 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 
 			// 根据 shouldReplace 标志执行操作
 			if shouldReplace {
+				// 调用 buildNewUA 来获取最终的 UA 字符串
+				// uaStr 是原始 UA 值, e.g., "Mozilla/5.0 (iPhone; ...)"
+				// userAgent 是替换字符串, e.g., "FFF"
+				finalUA := buildNewUA(uaStr, userAgent, uaRegexp, enablePartialReplace)
+
 				// 构造新行，同时必须保留原始的行尾 (CRLF 或 LF)
 				var newLine string
 				if strings.HasSuffix(line, "\r\n") {
-					newLine = fmt.Sprintf("User-Agent: %s\r\n", userAgent)
+					newLine = fmt.Sprintf("User-Agent: %s\r\n", finalUA)
 				} else {
-					newLine = fmt.Sprintf("User-Agent: %s\n", userAgent)
+					newLine = fmt.Sprintf("User-Agent: %s\n", finalUA)
 				}
 
 				// 写入修改后的行
@@ -339,9 +363,13 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				}
 
 				if force_replace {
-					logrus.Debugf("[%s] UA modified (forced): %s -> %s", destAddrPort, uaStr, userAgent)
+					logrus.Debugf("[%s] UA modified (forced): %s -> %s", destAddrPort, uaStr, finalUA)
 				} else {
-					logrus.Debugf("[%s] UA modified: %s -> %s", destAddrPort, uaStr, userAgent)
+					if enablePartialReplace && finalUA != userAgent {
+						logrus.Debugf("[%s] UA partially modified: %s -> %s", destAddrPort, uaStr, finalUA)
+					} else {
+						logrus.Debugf("[%s] UA fully modified: %s -> %s", destAddrPort, uaStr, finalUA)
+					}
 				}
 			} else {
 				// 不替换 (原因已在上面 log)

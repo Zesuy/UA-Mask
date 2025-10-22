@@ -60,8 +60,17 @@ bypass_ports.placeholder = "22 443"
 bypass_ports.description = "豁免的目标端口，用空格分隔 (如: '22 443')。"
 
 bypass_ips = main:taboption("general", Value, "bypass_ips", "绕过目标 IP")
-bypass_ips.placeholder = "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
+bypass_ips.placeholder = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
 bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
+
+uaRegexPattern = main:taboption("general", Value, "ua_regex", "ua 正则表达式模式")
+uaRegexPattern.placeholder = "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)"
+uaRegexPattern.description = "当不使用强制替换时，用于匹配 User-Agent 的正则表达式模式"
+
+partialRepalce = main:taboption("general", Flag, "partial_replace", "Partial Replace")
+partialRepalce.description =
+"仅替换匹配到的 User-Agent 部分，仅在 ua_regex 不为空时生效"
+partialRepalce.default = "0"
 
 log = main:taboption("log", TextValue, "")
 log.readonly = true
@@ -76,7 +85,7 @@ if apply then
     local enabled_form_value = luci.http.formvalue("cbid.ua3f-tproxy.enabled.enabled")
 
     if enabled_form_value == "1" then
-        -- 使用 luci.sys.call 异步执行，并重定向输出
+        -- 使用同步操作
         luci.sys.call("/etc/init.d/ua3f-tproxy restart >/dev/null 2>&1")
     else
         luci.sys.call("/etc/init.d/ua3f-tproxy stop >/dev/null 2>&1")
