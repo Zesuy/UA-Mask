@@ -20,16 +20,17 @@ import (
 )
 
 var (
-	version     = "0.1.0"
-	userAgent   string
-	port        int
-	logLevel    string
-	showVer     bool
-	cache       *expirable.LRU[string, string]
-	uaPattern   string
-	uaRegexp    *regexp2.Regexp
-	HTTP_METHOD = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
-	whitelist   = []string{
+	version       = "0.1.0"
+	userAgent     string
+	port          int
+	logLevel      string
+	showVer       bool
+	force_replace bool
+	cache         *expirable.LRU[string, string]
+	uaPattern     string
+	uaRegexp      *regexp2.Regexp
+	HTTP_METHOD   = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
+	whitelist     = []string{
 		"MicroMessenger Client",
 		"ByteDancePcdn",
 		"Go-http-client/1.1",
@@ -38,10 +39,11 @@ var (
 
 func main() {
 	// 解析命令行参数
-	flag.StringVar(&userAgent, "ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "User-Agent string")
+	flag.StringVar(&userAgent, "ua", "FFF", "User-Agent string")
 	flag.IntVar(&port, "port", 8080, "TPROXY listen port")
 	flag.StringVar(&logLevel, "loglevel", "info", "Log level (debug, info, warn, error)")
 	flag.BoolVar(&showVer, "v", false, "Show version")
+	flag.BoolVar(&force_replace, "force", false, "Force replace User-Agent, ignore whitelist and regex pattern")
 	flag.StringVar(&uaPattern, "r", "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)", "UA-Pattern (Regex)")
 	flag.Parse()
 	// 编译 UA 正则表达式
@@ -280,28 +282,48 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			// 提取 UA 字符串
 			uaStr := strings.TrimSpace(line[11:])
 
-			// 检查白名单
-			isInWhiteList := false
-			for _, v := range whitelist {
-				if v == uaStr {
-					isInWhiteList = true
-					break
+			var shouldReplace bool
+			if force_replace {
+				// 强制替换模式：忽略白名单和正则
+				shouldReplace = true
+				logrus.Debugf("[%s] Force replacing User-Agent: %s", destAddrPort, uaStr)
+			} else {
+				// 默认模式：检查白名单和正则
+				isInWhiteList := false
+				for _, v := range whitelist {
+					if v == uaStr {
+						isInWhiteList = true
+						break
+					}
+				}
+
+				isMatchUaPattern := true // 默认为 true
+				if uaRegexp != nil {
+					var err error
+					isMatchUaPattern, err = uaRegexp.MatchString(uaStr)
+					if err != nil {
+						logrus.Errorf("[%s] User-Agent Regex Pattern Match Error: %v", destAddrPort, err)
+						isMatchUaPattern = true // 如果匹配出错，假定匹配成功
+					}
+				}
+
+				shouldReplace = !isInWhiteList && isMatchUaPattern
+
+				if !shouldReplace {
+					// 记录不替换的原因并加入缓存
+					if isInWhiteList {
+						logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. Adding to LRU cache.", destAddrPort, uaStr)
+					} else { // 意味着 !isMatchUaPattern
+						logrus.Debugf("[%s] Not Hit User-Agent Pattern: %s. Adding to LRU cache.", destAddrPort, uaStr)
+					}
+					cache.Add(destAddrPort, destAddrPort)
+				} else {
+					logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
 				}
 			}
 
-			isMatchUaPattern := true // 默认为 true
-			if uaRegexp != nil {     // uaRegexp 必须在 main 函数中初始化
-				var err error
-				isMatchUaPattern, err = uaRegexp.MatchString(uaStr)
-				if err != nil {
-					logrus.Errorf("[%s] User-Agent Regex Pattern Match Error: %v", destAddrPort, err)
-					isMatchUaPattern = true // 如果匹配出错，假定匹配成功
-				}
-			}
-
-			if !isInWhiteList && isMatchUaPattern {
-				logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
-
+			// 根据 shouldReplace 标志执行操作
+			if shouldReplace {
 				// 构造新行，同时必须保留原始的行尾 (CRLF 或 LF)
 				var newLine string
 				if strings.HasSuffix(line, "\r\n") {
@@ -315,24 +337,21 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 					logrus.Errorf("[%s] Write modified UA line error: %v", destAddrPort, err)
 					return
 				}
-				logrus.Debugf("[%s] UA modified: %s -> %s", destAddrPort, uaStr, userAgent)
-			} else {
-				// 不替换 (原因：在白名单中 或 未匹配UA模式)
-				if isInWhiteList {
-					logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. Adding to LRU cache.", destAddrPort, uaStr)
-				} else { // 意味着 !isMatchUaPattern
-					logrus.Debugf("[%s] Not Hit User-Agent Pattern: %s. Adding to LRU cache.", destAddrPort, uaStr)
+
+				if force_replace {
+					logrus.Debugf("[%s] UA modified (forced): %s -> %s", destAddrPort, uaStr, userAgent)
+				} else {
+					logrus.Debugf("[%s] UA modified: %s -> %s", destAddrPort, uaStr, userAgent)
 				}
-
-				// 将此目标地址加入缓存，因为我们已确定不修改它
-				cache.Add(destAddrPort, destAddrPort)
-
+			} else {
+				// 不替换 (原因已在上面 log)
 				// 写入原始行
 				if _, err = io.WriteString(dst, line); err != nil {
 					logrus.Errorf("[%s] Write original UA line error: %v", destAddrPort, err)
 					return
 				}
 			}
+
 		} else {
 			// 7. 不是 UA 行，也不是空行，说明是其他 Header，原样写入
 			if _, err = io.WriteString(dst, line); err != nil {

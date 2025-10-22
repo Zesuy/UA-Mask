@@ -40,12 +40,20 @@ set_firewall() {
     local bypass_gid
     local bypass_ports_list
     local bypass_ips_list
+    local force_replace
 
     config_get port "main" "port" "12032"
     config_get iface_list "main" "iface" "br-lan"
     config_get bypass_gid "main" "bypass_gid" "65533"
     config_get bypass_ports_list "main" "bypass_ports" ""
     config_get bypass_ips_list "main" "bypass_ips" ""
+    config_get force_replace "main" "force_replace" "0"
+    
+    if [ "$force_replace" -eq "1" ]; then
+        force_replace=true
+    else
+        force_replace=false
+    fi
 
     # 3. 格式化接口
     local nft_ifaces
@@ -149,7 +157,7 @@ start_service() {
     local log_level
     
     config_get port "main" "port" "12032"
-    config_get ua "main" "ua" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    config_get ua "main" "ua" "FFF"
     config_get log_level "main" "log_level" "debug"
 
     procd_open_instance "$NAME"
@@ -158,7 +166,8 @@ start_service() {
     procd_set_param command $PROG \
         -port $port \
         -ua "$ua" \
-        -loglevel $log_level
+        -loglevel $log_level \
+        -force $force_replace
     procd_set_param group "ua3f-tproxy"
     # 4. 告诉 procd PID 文件的位置，以便它可以正确地停止/重启
     procd_set_param pidfile $PID_FILE

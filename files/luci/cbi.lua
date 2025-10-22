@@ -41,16 +41,19 @@ log_level:value("panic", "崩溃(panic)")
 log_level.description = "设置日志的详细程度。默认为debug用于确认一切正常工作，平时可以改为info"
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
-ua.placeholder = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+ua.placeholder = "FFF"
 
 iface = main:taboption("general", Value, "iface", "监听接口")
 iface.placeholder = "br-lan"
 iface.description = "指定一个或多个 LAN 接口，用空格分隔 (如: 'br-lan' 或 'br-lan eth1'),如果出问题会导致环路卡死！"
 
 bypass_gid = main:taboption("general", Value, "bypass_gid", "绕过 GID")
-bypass_gid.placeholder = "65534"
+bypass_gid.placeholder = "65533"
 bypass_gid.datatype = "uinteger"
 bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。如果不知道是什么请保持默认"
+
+force_replace = main:taboption("general", Flag, "force_replace", "强制修改 User-Agent")
+force_replace.description = "启用后将忽略白名单和正则，强制修改所有流量的 User-Agent。如果不启用，则只修改含设备标识的 User-Agent。如果正常使用依旧掉线，请尝试启用此选项。"
 
 bypass_ports = main:taboption("general", Value, "bypass_ports", "绕过目标端口")
 bypass_ports.placeholder = "22 443"
