@@ -3,7 +3,7 @@ local uci = require("luci.model.uci").cursor()
 ua3f_tproxy = Map("ua3f-tproxy",
     "UA3F-TPROXY",
     [[
-        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.1.5</a>
+        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.1.6</a>
         <br>
         用于修改 User-Agent 的透明代理,使用 TPROXY 技术实现。
         <br>
@@ -50,12 +50,15 @@ ua = main:taboption("general", Value, "ua", "User-Agent 标识")
 ua.placeholder = "FFF"
 ua.description = "用于替换设备标识的 User-Agent 字符串，当部分替换启用时，用当前值替换匹配到的部分。"
 
-force_replace = main:taboption("general", Flag, "force_replace", "强制修改UA")
-force_replace.description = "启用后将忽略正则，强制修改所有流量的 User-Agent。如果正常使用依旧掉线，请尝试启用此选项。"
-
-partialRepalce = main:taboption("general", Flag, "partial_replace", "部分替换UA")
-partialRepalce.description ="是否仅替换匹配到的正则部分，而非整个 User-Agent 字符串。"
-partialRepalce.default = "0"
+ua_mode = main:taboption("general", ListValue, "ua_mode", "UA 修改模式")
+ua_mode:value("smart_partial", "正则替换(部分)")
+ua_mode:value("smart_full", "正则替换(全量)")
+ua_mode:value("force_full", "全局替换")
+ua_mode.default = "smart_full" 
+ua_mode.description = "选择 User-Agent 的替换模式：<br />" ..
+                      "<b>正则替换(部分):</b> 仅当UA匹配正则时，才替换UA中的匹配部分。<br />" ..
+                      "<b>正则替换(全量):</b> 仅当UA匹配正则时，才将整个UA替换为新值。<br />" ..
+                      "<b>全局替换:</b> 忽略正则，强制将所有流量的UA替换为新值。"
 
 uaRegexPattern = main:taboption("general", Value, "ua_regex", "UA匹配正则")
 uaRegexPattern.placeholder = "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)"
@@ -92,7 +95,6 @@ bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 log = main:taboption("log", TextValue, "")
 log.readonly = true
 log.cfgvalue = function(self, section)
-    -- 从 logread 读取日志，因为 init 脚本重定向了 stdout/stderr
     return luci.sys.exec("logread -e ua3f-tproxy")
 end
 log.rows = 30
