@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"time"
 	"unsafe"
@@ -71,6 +72,7 @@ func main() {
 	logrus.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})
+	logrus.SetOutput(os.Stdout)
 	cache = expirable.NewLRU[string, string](300, nil, time.Second*600)
 
 	// 打印配置信息
