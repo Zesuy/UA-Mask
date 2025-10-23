@@ -27,11 +27,12 @@
   * 🤝 **高兼容性**: 可与 `mwan3`, `openclash`, `sqm_qos` 等常见插件完美共存。
   * 🍃 **无侵入**: 配置基于 UCI，卸载后不留任何防火墙残余。
 
+
 ## 📊 架构对比
 
 `ua3f-tproxy` 极大地优化了流量处理路径。
 
-### 1\. ua3f (原版 Socks5 方案)
+### 1\. ua3f (Socks5 方案)
 
 所有流量（包括国内）都必须经过 Clash，性能损失大。
 
@@ -43,11 +44,11 @@ graph LR
     C[Ua3f] --> E[OUTPUT]
 ```
 
-### 2\. ua3f-tproxy (TProxy 方案)
+### 2\. ⚡ ua3f-tproxy (TProxy 方案)
 
-**场景一：单独使用（推荐）**
+#### 场景一：单独使用（推荐）
 
-  * 无需依赖 OpenClash 即可修改 UA。
+  * 无需依赖 OpenClash 即可修改 UA，性能最高。
 
 <!-- end list -->
 
@@ -57,43 +58,44 @@ graph LR
     B{ua3f-tproxy} --> C[OUTPUT]
 ```
 
-**场景二：与 OpenClash 配合 (绕过大陆)**
+#### 场景二：与 OpenClash 配合 (完美分流)
 
-  * **配置**：ua3f-tproxy(代理本机关: `关闭`) + openclash(代理本机关: `开启`, 绕过大陆: `开启`)
-  * **效果**：国内流量仅由 ua3f-tproxy 修改 UA 后直连；国外流量由 OpenClash 代理。实现完美分流。
-  * **备注**：如果关闭 OpenClash 的本机代理，OpenClash 将只代理被绕过的端口 (默认 22, 443)。
+  * **配置**：ua3f-tproxy (代理本机: `关闭`) + openclash (代理本机: `开启`, 绕过大陆: `开启`)
+  * **效果**：实现完美分流。非 `22/443` 端口流量先由 `ua3f-tproxy` 修改 UA (HTTP)，再统一交由 `OpenClash` 接管。`OpenClash` 会将国内流量直连，国外流量走代理。
+  * **备注**：此模式下，如果关闭 OpenClash 的“绕过大陆”，则所有流量（HTTP/HTTPS）都会先过 `ua3f-tproxy` 再过 `OpenClash`，性能与原版 `ua3f` 近似。
 
 <!-- end list -->
 
 ```mermaid
 graph LR
     A[LAN 流量] --> B{防火墙规则}
-    B -->|端口 22, 443| C{OpenClash}
+    B -->|22 443 端口| C{OpenClash规则}
+    B -->|其他端口| D[ua3f-tproxy]
+    
+    C -->|国内流量| E[OUTPUT 直连]
+    C -->|需要代理| F[Clash 核心]
+    
+    D --"本机代理开启"--> C{OpenClash规则}
+```
+
+#### 场景三：与 OpenClash 配合 (有缺陷，最大兼容)
+
+  * **配置**：ua3f-tproxy (代理本机: `关闭`) + openclash (代理本机: `关闭`，绕过大陆: `开启`)
+  * **效果**: 这是一种**割裂**的配置。`OpenClash` 将**仅**代理被 ua3f-tproxy 绕过的端口 (默认 `22`, `443`)。**不推荐使用**
+  * **缺陷**: 所有其他端口（如 `80` 端口）的流量，在被 `ua3f-tproxy` 修改 UA 后将**全部直连**，**不会**进入 OpenClash 走代理。
+
+<!-- end list -->
+
+```mermaid
+graph LR
+    A[LAN 流量] --> B{防火墙规则}
+    B -->|端口 22, 443| C{openclash规则}
     B -->|非 22, 443 端口| D[ua3f-tproxy]
     
     C -->|国内流量| E[OUTPUT 直连]
     C -->|需要代理| F[Clash 核心]
     
     D --> E[OUTPUT 直连]
-```
-
-**场景三：与 OpenClash 配合 (全局代理)**
-
-  * **配置**：ua3f-tproxy(代理本机关: `开启`) + openclash(代理本机: `开启`)
-  * **效果**：ua3f-tproxy 发出的流量会被 OpenClash 再次捕获并处理。
-
-<!-- end list -->
-
-```mermaid
-graph LR
-    A[LAN 流量] --> B{防火墙规则}
-    B -->|22 443| C{OpenClash}
-    B --> D[ua3f-tproxy]
-    
-    C -->|国内流量| E[OUTPUT 直连]
-    C -->|需要代理| F[Clash 核心]
-    
-    D --本机代理--> C{OpenClash}
 ```
 
 ## 🛠️ UA 替换模式说明
