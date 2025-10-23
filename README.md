@@ -97,7 +97,9 @@ graph LR
     
     D --> E[OUTPUT 直连]
 ```
-
+## 🧩 luci截图
+![screenshot](./img/screemshot_general.jpg)
+![screenshot](./img/screenshot_network.jpg)
 ## 🛠️ UA 替换模式说明
 
 ### 1\. 局部替换 (正则)
