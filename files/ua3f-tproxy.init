@@ -153,7 +153,7 @@ start_service() {
     fi
 
     local proxy_host
-    config_get_bool proxy_host "main" "proxy_host" "1"
+    config_get_bool proxy_host "main" "proxy_host" "0"
 
     if [ "$proxy_host" = "1" ]; then
         # 1. 启用代理本机时确保组存在
