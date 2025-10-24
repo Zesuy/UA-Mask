@@ -291,10 +291,9 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				return
 			}
 
-			// 5.快速转发剩余所有数据
-			logrus.Debugf("[%s] Header end, starting fast relay (io.Copy)", destAddrPort)
-			io.Copy(dst, srcReader)
-			return // 此连接处理完毕
+			logrus.Debugf("[%s] Header end, continuing line-by-line scan for body or next request", destAddrPort)
+			uaFound = false
+			continue
 		}
 
 		// 6. 检查是否是 User-Agent 行
