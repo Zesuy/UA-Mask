@@ -21,7 +21,7 @@ unset_firewall_rules() {
 unset_firewall() {
     logger -t "$NAME" "Removing firewall rules..."
     unset_firewall_rules
-    nft delete chain inet fw4 ua3f_prerouting_after 2>/dev/null || true
+    nft delete chain inet fw4 ua3f_prerouting_before 2>/dev/null || true
     nft delete chain inet fw4 ua3f_output_after 2>/dev/null || true
     fw4 reload >/dev/null 2>&1
     logger -t "$NAME" "Firewall rules removed."
@@ -80,8 +80,7 @@ set_firewall() {
 
 # 6. 动态写入 .nft 文件
     cat > "${NFT_PATH}" << EOF
-chain ua3f_prerouting_after {
-    # 优先级必须低于 OpenClash (dstnat / -100)，例如 -101
+chain ua3f_prerouting_before {
     type nat hook prerouting priority dstnat - 1;
 iifname $nft_ifaces \\
     ip protocol tcp \\
@@ -121,7 +120,7 @@ EOF
     uci set firewall.${FW_CONFIG_NAME}.path="${NFT_PATH}"
     uci set firewall.${FW_CONFIG_NAME}.enabled="1"
     uci commit firewall
-    nft delete chain inet fw4 ua3f_prerouting_after 2>/dev/null || true
+    nft delete chain inet fw4 ua3f_prerouting_before 2>/dev/null || true
     nft delete chain inet fw4 ua3f_output_after 2>/dev/null || true
     fw4 reload >/dev/null 2>&1
     logger -t "$NAME" "Firewall rules applied."
