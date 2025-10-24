@@ -164,6 +164,8 @@ start_service() {
     config_get ua "main" "ua" "FFF"
     config_get log_level "main" "log_level" "debug"
     config_get ua_regex "main" "ua_regex" "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
+    config_get log_file "main" "log_file" "/tmp/ua3f-tproxy/ua3f-tproxy.log"
+    mkdir -p /tmp/ua3f-tproxy
 
     local ua_mode
     local force_replace
@@ -199,7 +201,8 @@ start_service() {
     procd_append_param command -ua "$ua"
     procd_append_param command -loglevel "$log_level"
     procd_append_param command -r "$ua_regex"
-
+    [ -n "$log_file" ] && procd_append_param command -log "$log_file"
+    
     if [ "$force_replace" = "1" ]; then
         # 如果启用，则忽略 -s 标志，因为 Go 程序会优先使用 -force
         procd_append_param command -force

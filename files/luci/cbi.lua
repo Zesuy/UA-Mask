@@ -30,8 +30,8 @@ end
 
 main:tab("general", "常规设置")
 main:tab("network", "网络与防火墙")
-main:tab("log", "日志")
-
+main:tab("syslog", "系统日志")
+main:tab("softlog", "应用日志")
 
 -- === Tab 1: 常规设置 (UA 相关) ===
 port = main:taboption("general", Value, "port", "监听端口")
@@ -45,6 +45,11 @@ log_level:value("warn", "警告(warn)")
 log_level:value("error", "错误(error)")
 log_level:value("fatal", "致命(fatal)")
 log_level:value("panic", "崩溃(panic)")
+
+log_file = main:taboption("general", Value, "log_file", "应用日志路径")
+log_file.placeholder = "/tmp/ua3f-tproxy/ua3f-tproxy.log"
+log_file.description = "指定 Go 程序运行时日志的输出文件路径。留空将禁用文件日志。"
+log_file.default = "/tmp/ua3f-tproxy/ua3f-tproxy.log"
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
 ua.placeholder = "FFF"
@@ -92,13 +97,30 @@ bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 
 -- === Tab 3: 日志 ===
 
-log = main:taboption("log", TextValue, "")
-log.readonly = true
-log.cfgvalue = function(self, section)
-    return luci.sys.exec("logread -e ua3f-tproxy")
+syslog = main:taboption("syslog", TextValue, "")
+syslog.readonly = true
+syslog.cfgvalue = function(self, section)
+    return luci.sys.exec("logread -e ua3f-tproxy -l 200")
 end
-log.rows = 30
+syslog.rows = 30
 
+
+softlog = main:taboption("softlog", TextValue, "")
+softlog.readonly = true
+softlog.rows = 30
+softlog.cfgvalue = function(self, section)
+    local log_file_path = self.map:get("main", "log_file")
+    return luci.sys.exec("tail -n 200 \"" .. log_file_path .. "\" 2>/dev/null")
+end
+
+local clear_btn = main:taboption("softlog", Button, "clear_log", "清空应用日志")
+clear_btn.inputstyle = "danger"
+clear_btn.write = function(self, section)
+    local log_file_path = self.map:get(section, "log_file")
+    if log_file_path and log_file_path ~= "" and nixio.fs.access(log_file_path) then
+       luci.sys.exec("> \"" .. log_file_path .. "\"")
+    end
+end
 
 -- === Apply/Restart 逻辑 (保持不变) ===
 
