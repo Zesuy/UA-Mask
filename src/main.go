@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var (
@@ -31,6 +32,7 @@ var (
 	cache                *expirable.LRU[string, string]
 	uaPattern            string
 	uaRegexp             *regexp2.Regexp
+	logFile              string
 	HTTP_METHOD          = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
 	whitelist            = []string{
 		"MicroMessenger Client",
@@ -47,6 +49,7 @@ func main() {
 	flag.BoolVar(&showVer, "v", false, "Show version")
 	flag.BoolVar(&force_replace, "force", false, "Force replace User-Agent, ignore whitelist and regex pattern")
 	flag.BoolVar(&enablePartialReplace, "s", false, "Enable Regex Partial Replace")
+	flag.StringVar(&logFile, "log", "", "Log file path (e.g., /tmp/ua3f-tproxy.log). Default is stdout.")
 	flag.StringVar(&uaPattern, "r", "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)", "UA-Pattern (Regex)")
 	flag.Parse()
 	// 编译 UA 正则表达式
@@ -62,7 +65,22 @@ func main() {
 		return
 	}
 
-	// 设置日志级别
+	if logFile != "" {
+		// 如果指定了 -log 文件路径，则使用 lumberjack 进行文件滚动日志
+		logFileRotator := &lumberjack.Logger{
+			Filename:   logFile,
+			MaxSize:    1,
+			MaxBackups: 3,
+			MaxAge:     7,
+			Compress:   false,
+		}
+		logrus.SetOutput(logFileRotator)
+	} else {
+		// 否则，输出到标准输出 (stdout)
+		logrus.SetOutput(os.Stdout)
+	}
+
+	//loglevel
 	level, err := logrus.ParseLevel(logLevel)
 	if err != nil {
 		logrus.Warnf("Invalid log level '%s', using 'info'", logLevel)
@@ -72,7 +90,6 @@ func main() {
 	logrus.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})
-	logrus.SetOutput(os.Stdout)
 	cache = expirable.NewLRU[string, string](300, nil, time.Second*600)
 
 	// 打印配置信息
