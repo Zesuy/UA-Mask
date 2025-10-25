@@ -30,7 +30,6 @@ end
 
 main:tab("general", "常规设置")
 main:tab("network", "网络与防火墙")
-main:tab("syslog", "系统日志")
 main:tab("softlog", "应用日志")
 
 -- === Tab 1: 常规设置 (UA 相关) ===
@@ -95,26 +94,20 @@ bypass_ips.placeholder = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/1
 bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 
 
--- === Tab 3: 日志 ===
-
-syslog = main:taboption("syslog", TextValue, "")
-syslog.readonly = true
-syslog.cfgvalue = function(self, section)
-    return luci.sys.exec("logread -e ua3f-tproxy -l 200")
-end
-syslog.rows = 30
-
 
 softlog = main:taboption("softlog", TextValue, "")
 softlog.readonly = true
 softlog.rows = 30
 softlog.cfgvalue = function(self, section)
     local log_file_path = self.map:get("main", "log_file")
+    if not log_file_path or log_file_path == "" then
+        return "(未配置应用日志文件路径)"
+    end
     return luci.sys.exec("tail -n 200 \"" .. log_file_path .. "\" 2>/dev/null")
 end
 
 local clear_btn = main:taboption("softlog", Button, "clear_log", "清空应用日志")
-clear_btn.inputstyle = "danger"
+clear_btn.inputstyle = "reset"
 clear_btn.write = function(self, section)
     local log_file_path = self.map:get(section, "log_file")
     if log_file_path and log_file_path ~= "" and nixio.fs.access(log_file_path) then
