@@ -339,8 +339,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			// Header 结束
 			if !uaFound {
 				// 整个 Header 都读完了，也没找到 User-Agent
-				logrus.Debugf("[%s] No User-Agent header, skip modification. Adding to LRU cache.", destAddrPort)
-				cache.Add(destAddrPort, destAddrPort)
+				logrus.Debugf("[%s] No User-Agent header, skip modification. ", destAddrPort)
 			}
 
 			// 将 Header 的结尾（空行）写入目标
@@ -395,11 +394,10 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				if !shouldReplace {
 					// 记录不替换的原因并加入缓存
 					if isInWhiteList {
-						logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. Adding to LRU cache.", destAddrPort, uaStr)
+						logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. ", destAddrPort, uaStr)
 					} else { // 意味着 !isMatchUaPattern
-						logrus.Debugf("[%s] Not Hit User-Agent Pattern: %s. Adding to LRU cache.", destAddrPort, uaStr)
+						logrus.Debugf("[%s] Not Hit User-Agent Pattern: %s. ", destAddrPort, uaStr)
 					}
-					cache.Add(destAddrPort, destAddrPort)
 				} else {
 					logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
 				}
