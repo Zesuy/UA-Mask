@@ -8,6 +8,18 @@
 
 本项目基于 [UA3F](https://github.com/SunBK201/UA3F) 重构，但使用 `TProxy (REDIRECT)` 方式重定向防火墙流量，实现了**卓越的性能**和**极低的内存占用**。
 
+> [!IMPORTANT]
+>
+> **项目现已原生支持 `iptables`！**
+>
+>  `ua3f-tproxy` 现在可以完美运行在 **OpenWrt 21.02, 22.03** 等旧版固件上。
+>
+> - **OpenWrt 23.05+ 用户**: 请使用默认的 `nftables` 版本 (`ua3f-tproxy_*.ipk`)。
+> - **OpenWrt 21.02 / 22.03 用户**: 请从 Release 页面下载 `iptables` 版本 (`ua3f-tproxy-ipt_*.ipk`)。
+>
+> 两者功能完全相同，且都与 OpenClash 等插件兼容。
+
+
 ## 🎯 解决了什么问题？
 
 本项目主要用于解决**校园网环境对多设备共享上网的检测**问题。
@@ -21,7 +33,7 @@
 
 ## ✨ 核心特性
 
-  * 🚀 **一键启用**: LuCI 界面勾选启用，自动配置 `nftables` 防火墙，无需任何额外配置。
+  * 🚀 **一键启用**: 根据您安装的版本自动配置 `nftables` 或 `iptables` 防火墙，无需任何额外配置
   * ⚡ **高性能**: 采用 TProxy 架构，流量路径短，开销极低。
   * RAM **低内存占用**: 不依赖 Clash 核心，内存占用仅 **数MB**。
   * 🤝 **高兼容性**: 可与 `mwan3`, `openclash`, `sqm_qos` 等常见插件完美共存。
@@ -99,7 +111,9 @@ graph LR
 ```
 ## 🧩 luci截图
 ![screenshot](./img/screemshot_general.jpg)
+![screenshot](./img/screemshot_general_1.jpg)
 ![screenshot](./img/screenshot_network.jpg)
+
 ## 🛠️ UA 替换模式说明
 
 ### 1\. 局部替换 (正则)
@@ -152,17 +166,36 @@ graph LR
 
 ## 📦 安装
 
-我们提供两种安装方式：
+我们为不同版本的 OpenWrt 提供了相应的预编译包。
 
-### 1\. 预编译包 (推荐)
+### 1. 确认您的防火墙类型 (重要)
+
+在下载前，请先确认您的 OpenWrt 系统使用的是 `nftables` 还是 `iptables`。通过 SSH 连接到路由器后，执行以下命令：
+
+```bash
+# 如果执行 fw4 有响应, 说明是 nftables (通常是 OpenWrt 23.05+)
+fw4 --version
+
+# 如果执行 fw3 有响应, 说明是 iptables (通常是 OpenWrt 21.02, 22.03)
+fw3 --version
+```
+### 2. 下载并安装预编译包
 
 1.  前往 [Releases 页面](https://github.com/Zesuy/UA3F-tproxy/releases)。
-2.  下载适用于您路由器架构 (如 `x86_64`, `aarch64_cortex-a53`, `mips_24kc` 等) 的 `.ipk` 安装包。
-3.  将 `.ipk` 包上传到 OpenWrt 的 `/tmp` 目录。
-4.  通过 SSH 或 LuCI 终端执行安装：
+2.  根据您的防火墙类型和路由器架构 (如 `x86_64`, `aarch64_cortex-a53` 等) 下载对应的 `.ipk` 包：
+    *   **对于 `nftables` 系统**: 下载 `ua3f-tproxy_*.ipk`
+    *   **对于 `iptables` 系统**: 下载 `ua3f-tproxy-ipt_*.ipk`
+
+3.  将下载的 `.ipk` 包上传到 OpenWrt 的 `/tmp` 目录。
+4.  通过 SSH 执行安装：
     ```bash
-    opkg install /tmp/luci-app-ua3f-tproxy_*.ipk
+    # 安装 nftables 版本
+    opkg install /tmp/ua3f-tproxy_*.ipk
+    
+    # 或者安装 iptables 版本
+    opkg install /tmp/ua3f-tproxy-ipt_*.ipk
     ```
+
 
 ### 2\. 源码编译
 
@@ -173,6 +206,9 @@ graph LR
     make clean
     make package/UA3F-tproxy/compile
     ```
+    编译完成后将在`/$(rootdir)/bin/packages/$(targetdir)/base/`中生成`ua3f-tproxy_xxx.ipk`和`ua3f-tproxy-ipt_xxx.ipk`
+
+    如果需要打包进固件，请在network/Web Servers/ua3f-tproxy或者ua3f-tproxy-ipt选择一个*。
 
 ## 🚀 使用方法
 
@@ -189,11 +225,3 @@ graph LR
   * **系统依赖**: 本项目基于 OpenWrt 23.05+ 构建，依赖 `nftables`。
   * **重要**: "ua3f-tproxy" 按照上方**架构对比**中的 "场景二" 配置可实现完美的流量处理（国内流量只改 UA，国外流量走代理）。请在 ua3f-tproxy 中 **关闭** "代理路由器本机"，并在 OpenClash 设置中 **打开** "代理路由器流量"。
   * **测试**: 已在 `X86_64` (OpenWrt 23.05) 平台测试通过，可与 `openclash`, `sqm_qos`, `mwan3`, `wireguard` 等插件正常协同工作。
-
-## 📈 性能优化细节
-
-`ua3f-tproxy` 在解析 HTTP 请求时也做了深度优化：
-
-  * **流式解析**: 应用从数据流头部开始寻找 `User-Agent` 字段。
-  * **立即修改**: 一旦找到该字段，立即对其进行解析和修改。
-  * **直接复制**: 该字段之后的所有请求头数据，全部通过 `io.copy` 直接转发，省去了完整解析 HTTP 头的内存与性能开销。
