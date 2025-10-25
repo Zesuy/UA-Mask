@@ -76,11 +76,8 @@ stats_display.cfgvalue = function(self, section)
 
     -- 格式化为单行
     return string.format(
-    "<b>当前连接:</b> %s <br>" ..
-    "<b>HTTP请求数:</b> %s <br>" ..
-    "<b>正则匹配:</b> %s <br>" ..
-    "<b>成功修改:</b> %s",
-    active, http, regex, modified
+        "<b>当前连接:</b> %s | <b>HTTP请求:</b> %s | <b>正则匹配:</b> %s | <b>成功修改:</b> %s",
+        active, http, regex, modified
     )
 end
 
