@@ -35,13 +35,10 @@ end
 ua3f_tproxy = Map("ua3f-tproxy",
     "UA3F-TPROXY",
     [[
-        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.1.6</a>
+        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.1.7</a>
         <br>
         用于修改 User-Agent 的透明代理,使用 TPROXY 技术实现。
         <br>
-        请谨慎与其他 TPROXY 服务同时使用，可能会导致冲突和环路。
-        <br>
-        在默认情况下，不会修改全部的UA，而是只修改正则匹配到的(包含设备名称的)UA,其余不含设备名的UA(steam,pcdn等)不做处理
     ]]
 )
 
@@ -68,7 +65,7 @@ stats_display.cfgvalue = function(self, section)
     end
     
     local stats = get_stats()
-    -- 设置默认值，防止文件还未生成时显示 "nil"
+    
     local active = stats["active_connections"] or "0"
     local http = stats["http_requests"] or "0"
     local regex = stats["regex_hits"] or "0"
