@@ -1,0 +1,213 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=99
+STOP=90 # 确保在防火墙重载前停止
+
+NAME="ua3f-tproxy"
+PROG="/usr/bin/$NAME"
+PID_FILE="/var/run/$NAME.pid"
+
+
+IPT="iptables"
+CHAIN_PREROUTING="ua3f_prerouting"
+CHAIN_OUTPUT="ua3f_output"
+
+# 清理防火墙规则并重载
+unset_firewall() {
+    logger -t "$NAME" "Removing firewall rules (iptables)..."
+    
+    # 循环尝试删除跳转规则，直到成功或失败
+    while $IPT -t nat -D PREROUTING -j $CHAIN_PREROUTING 2>/dev/null; do :; done
+    while $IPT -t nat -D OUTPUT -j $CHAIN_OUTPUT 2>/dev/null; do :; done
+
+
+    $IPT -t nat -F $CHAIN_PREROUTING 2>/dev/null || true
+    $IPT -t nat -X $CHAIN_PREROUTING 2>/dev/null || true
+    
+    $IPT -t nat -F $CHAIN_OUTPUT 2>/dev/null || true
+    $IPT -t nat -X $CHAIN_OUTPUT 2>/dev/null || true
+    
+
+    /etc/init.d/firewall reload >/dev/null 2>&1
+    logger -t "$NAME" "Firewall rules removed."
+}
+
+
+set_firewall() {
+    # 1. 确保旧规则被彻底清除
+    unset_firewall
+
+    # 2. 从 UCI 读取配置 (此部分不变)
+    config_load "$NAME"
+    local port
+    local iface_list
+    local bypass_gid
+    local bypass_ports_list
+    local bypass_ips_list
+    local proxy_host
+
+    config_get port "main" "port" "12032"
+    config_get iface_list "main" "iface" "br-lan"
+    config_get bypass_gid "main" "bypass_gid" "65533"
+    config_get bypass_ports_list "main" "bypass_ports" ""
+    config_get bypass_ips_list "main" "bypass_ips" ""
+    config_get_bool proxy_host "main" "proxy_host" ""
+
+    # --- IPTABLES 规则设置 ---
+
+    # 3. 创建自定义链
+    $IPT -t nat -N $CHAIN_PREROUTING
+    $IPT -t nat -N $CHAIN_OUTPUT
+
+    # 4. 填充 PREROUTING 链
+    for iface in $iface_list; do
+        for ip in $bypass_ips_list; do
+            $IPT -t nat -A $CHAIN_PREROUTING -i "$iface" -p tcp -d "$ip" -j RETURN
+        done
+        if [ -n "$bypass_ports_list" ]; then
+            local ipt_ports=$(echo "$bypass_ports_list" | sed 's/ /,/g')
+            $IPT -t nat -A $CHAIN_PREROUTING -i "$iface" -p tcp -m multiport --dports "$ipt_ports" -j RETURN
+        fi
+        # 将剩余的 TCP 流量重定向到代理端口
+        $IPT -t nat -A $CHAIN_PREROUTING -i "$iface" -p tcp -j REDIRECT --to-port "$port"
+    done
+
+    # 5. OUTPUT 链处理本机流量
+    if [ "$proxy_host" = "1" ]; then
+        # 豁免 ua3f-tproxy 自己的流量 (通过 GID)
+        $IPT -t nat -A $CHAIN_OUTPUT -p tcp -m owner --gid-owner "$bypass_gid" -j RETURN
+        # 同时豁免 OpenClash 的流量 (GID 65534)，防止循环
+        $IPT -t nat -A $CHAIN_OUTPUT -p tcp -m owner --gid-owner "65534" -j RETURN
+        
+        # 豁免指定的目标 IP
+        for ip in $bypass_ips_list; do
+            $IPT -t nat -A $CHAIN_OUTPUT -p tcp -d "$ip" -j RETURN
+        done
+        
+        # 豁免指定的端口
+        if [ -n "$bypass_ports_list" ]; then
+            local ipt_ports=$(echo "$bypass_ports_list" | sed 's/ /,/g')
+            $IPT -t nat -A $CHAIN_OUTPUT -p tcp -m multiport --dports "$ipt_ports" -j RETURN
+        fi
+
+        # 将剩余的 TCP 流量重定向到代理端口
+        $IPT -t nat -A $CHAIN_OUTPUT -p tcp -j REDIRECT --to-port "$port"
+        
+        # 将自定义 OUTPUT 链挂载到内置的 OUTPUT 链
+        $IPT -t nat -I OUTPUT 1 -j $CHAIN_OUTPUT
+        logger -t "$NAME" "proxy_host is enabled. Added iptables rules for OUTPUT chain."
+    else
+        logger -t "$NAME" "proxy_host is disabled. Skipping OUTPUT chain rules."
+    fi
+
+    # 6. 将自定义 PREROUTING 链挂载到内置的 PREROUTING 链
+    $IPT -t nat -I PREROUTING 1 -j $CHAIN_PREROUTING
+    
+    logger -t "$NAME" "Firewall rules (iptables) applied."
+}
+
+# 检查并创建专用组
+setup_group() {
+    config_load "$NAME"
+    local bypass_gid
+    config_get bypass_gid "main" "bypass_gid" "65533"
+
+    if ! grep -q ":$bypass_gid:" /etc/group; then
+        echo "ua3f-tproxy:x:$bypass_gid:" >> /etc/group
+    fi
+}
+
+# 服务启动逻辑
+start_service() {
+    config_load "$NAME"
+
+    local enabled
+    config_get_bool enabled "enabled" "enabled" "0"
+    if [ "$enabled" -ne "1" ];
+    then
+        return 1
+    fi
+
+    local proxy_host
+    config_get_bool proxy_host "main" "proxy_host" "0"
+
+    if [ "$proxy_host" = "1" ]; then
+        # 1. 启用代理本机时确保组存在
+        setup_group 
+    fi
+    # 2. 读取 procd 启动所需的配
+    local port
+    local ua
+    local log_level
+    
+    config_get port "main" "port" "12032"
+    config_get ua "main" "ua" "FFF"
+    config_get log_level "main" "log_level" "debug"
+    config_get ua_regex "main" "ua_regex" "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
+    config_get log_file "main" "log_file" "/tmp/ua3f-tproxy/ua3f-tproxy.log"
+    mkdir -p /tmp/ua3f-tproxy
+
+    local ua_mode
+    local force_replace
+    local partial_replace
+    config_get ua_mode "main" "ua_mode" "smart_full"
+    if [ "$ua_mode" = "smart_full" ]; then
+        force_replace="0"
+        partial_replace="0"
+    elif [ "$ua_mode" = "smart_partial" ]; then
+        force_replace="0"
+        partial_replace="1"
+    elif [ "$ua_mode" = "force_full" ]; then
+        force_replace="1"
+        partial_replace="0"
+    else
+        force_replace="0"
+        partial_replace="0"
+    fi
+
+    # 4. 启动 procd 实例
+    procd_open_instance "$NAME"
+    procd_set_param command "$PROG"
+
+    # 5. 使用 append_param 逐个添加参数
+    if [ "$proxy_host" = "1" ]; then
+        procd_set_param group "ua3f-tproxy" 
+        logger -t "$NAME" "Running as group 'ua3f-tproxy' for host proxying."
+    else
+        logger -t "$NAME" "Running as default user (proxy_host is disabled)."
+    fi
+    procd_append_param command -port "$port"
+    procd_append_param command -ua "$ua"
+    procd_append_param command -loglevel "$log_level"
+    procd_append_param command -r "$ua_regex"
+    [ -n "$log_file" ] && procd_append_param command -log "$log_file"
+    
+    if [ "$force_replace" = "1" ]; then
+        procd_append_param command -force
+        logger -t "$NAME" "Starting with -force enabled. Partial replace (-s) will be ignored."
+    elif [ "$partial_replace" = "1" ]; then
+        procd_append_param command -s
+        logger -t "$NAME" "Starting with partial replace (-s) enabled."
+    else
+        logger -t "$NAME" "Starting with default (full) replace mode."
+    fi
+
+    procd_set_param respawn    
+    procd_set_param stdout 1   
+    procd_set_param stderr 1  
+
+    procd_close_instance
+    set_firewall
+}
+
+# 服务停止逻辑 (不变)
+stop_service() {
+    logger -t "$NAME" "Stopping $NAME..."
+    # 停止服务时自动清理防火墙
+    unset_firewall
+}
+
+service_triggers() {
+    procd_add_reload_trigger "$NAME"
+}
