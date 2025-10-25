@@ -127,10 +127,16 @@ end
 local apply = luci.http.formvalue("cbi.apply")
 if apply then
     local enabled_form_value = luci.http.formvalue("cbid.ua3f-tproxy.enabled.enabled")
+    
+    local pid = luci_sys.exec("pidof ua3f-tproxy")
+    local is_running = (pid ~= "" and pid ~= nil)
 
     if enabled_form_value == "1" then
-        -- 使用同步操作
-        luci.sys.call("/etc/init.d/ua3f-tproxy restart >/dev/null 2>&1")
+        if is_running then
+            luci.sys.call("/etc/init.d/ua3f-tproxy reload >/dev/null 2>&1")
+        else
+            luci.sys.call("/etc/init.d/ua3f-tproxy start >/dev/null 2>&1")
+        end
     else
         luci.sys.call("/etc/init.d/ua3f-tproxy stop >/dev/null 2>&1")
     end

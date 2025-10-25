@@ -234,10 +234,4 @@ stop_service() {
 
 service_triggers() {
     procd_add_reload_trigger "$NAME"
-    procd_add_reload_trigger "firewall" # 监听防火墙重载
-}
-restart() {
-    logger -t "$NAME" "Restarting $NAME..."
-    #restart不需要unset防火墙，直接重载即可
-    start_service
 }
