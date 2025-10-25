@@ -1,4 +1,36 @@
 local uci = require("luci.model.uci").cursor()
+local nixio = require("nixio")
+local luci_sys = require("luci.sys")
+
+local stats_cache = nil
+local stats_file = "/tmp/ua3f-tproxy.stats"
+
+local function get_stats()
+    if stats_cache then
+        return stats_cache
+    end
+
+    local f = io.open(stats_file, "r")
+    if not f then
+        return {}
+    end
+
+    stats_cache = {}
+    for line in f:lines() do
+        local key, val = line:match("([^:]+):(.*)")
+        if key and val then
+            stats_cache[key] = val
+        end
+    end
+    f:close()
+    return stats_cache
+end
+
+-- 辅助函数，用于从缓存中获取特定值
+local function get_stat_value(key)
+    local stats = get_stats()
+    return stats[key] or "0"
+end
 
 ua3f_tproxy = Map("ua3f-tproxy",
     "UA3F-TPROXY",
@@ -20,12 +52,36 @@ enable:option(Flag, "enabled", "启用")
 status = enable:option(DummyValue, "status", "运行状态")
 status.rawhtml = true
 status.cfgvalue = function(self, section)
-    local pid = luci.sys.exec("pidof ua3f-tproxy")
+    local pid = luci_sys.exec("pidof ua3f-tproxy")
     if pid == "" then
     return "<span style='color:red'>" .. "未运行" .. "</span>"
     else
     return "<span style='color:green'>" .. "运行中" .. "</span>"
     end
+end
+stats_display = enable:option(DummyValue, "stats_display", "运行统计")
+stats_display.rawhtml = true
+stats_display.cfgvalue = function(self, section)
+    local pid = luci_sys.exec("pidof ua3f-tproxy")
+    if pid == "" then
+        return "<em>(服务未运行时不统计)</em>"
+    end
+    
+    local stats = get_stats()
+    -- 设置默认值，防止文件还未生成时显示 "nil"
+    local active = stats["active_connections"] or "0"
+    local http = stats["http_requests"] or "0"
+    local regex = stats["regex_hits"] or "0"
+    local modified = stats["modifications_done"] or "0"
+
+    -- 格式化为单行
+    return string.format(
+    "<b>当前连接:</b> %s <br>" ..
+    "<b>HTTP请求数:</b> %s <br>" ..
+    "<b>正则匹配:</b> %s <br>" ..
+    "<b>成功修改:</b> %s",
+    active, http, regex, modified
+    )
 end
 
 main:tab("general", "常规设置")

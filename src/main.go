@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -39,7 +40,41 @@ var (
 		"ByteDancePcdn",
 		"Go-http-client/1.1",
 	}
+	statsActiveConnections atomic.Uint64 // 当前活跃连接数
+	statsHttpRequests      atomic.Uint64 // 已处理 HTTP 请求总数
+	statsRegexHits         atomic.Uint64 // 正则命中总数
+	statsModifiedRequests  atomic.Uint64 // 成功篡改总数
 )
+
+func startStatsWriter(filePath string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		// 原子地读取所有计数器
+		httpRequests := statsHttpRequests.Load()
+		regexHits := statsRegexHits.Load()
+		modified := statsModifiedRequests.Load()
+		activeConn := statsActiveConnections.Load()
+
+		// 格式化为简单的 key:value 格式
+		content := fmt.Sprintf(
+			"active_connections:%d\n"+
+				"http_requests:%d\n"+
+				"regex_hits:%d\n"+
+				"modifications_done:%d\n",
+			activeConn,
+			httpRequests,
+			regexHits,
+			modified,
+		)
+
+		err := os.WriteFile(filePath, []byte(content), 0644)
+		if err != nil {
+			logrus.Warnf("Failed to write stats file: %v", err)
+		}
+	}
+}
 
 func main() {
 	// 解析命令行参数
@@ -109,6 +144,8 @@ func main() {
 
 	logrus.Infof("REDIRECT proxy server listening on 0.0.0.0:%d", port)
 
+	go startStatsWriter("/tmp/ua3f-tproxy.stats", 5*time.Second)
+
 	for {
 		conn, err := listener.AcceptTCP()
 		if err != nil {
@@ -121,7 +158,11 @@ func main() {
 }
 
 func handleConnection(clientConn *net.TCPConn) {
-	defer clientConn.Close()
+	statsActiveConnections.Add(1)
+	defer func() {
+		statsActiveConnections.Add(^uint64(0))
+		clientConn.Close()
+	}()
 
 	// 获取原始目标地址
 	originalDst, err := getOriginalDst(clientConn)
@@ -310,6 +351,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 
 			logrus.Debugf("[%s] Header end, continuing line-by-line scan for body or next request", destAddrPort)
 			uaFound = false
+			statsHttpRequests.Add(1)
 			continue
 		}
 
@@ -342,6 +384,10 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 						logrus.Errorf("[%s] User-Agent Regex Pattern Match Error: %v", destAddrPort, err)
 						isMatchUaPattern = true // 如果匹配出错，假定匹配成功
 					}
+				}
+
+				if isMatchUaPattern {
+					statsRegexHits.Add(1)
 				}
 
 				shouldReplace = !isInWhiteList && isMatchUaPattern
@@ -379,6 +425,8 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 					logrus.Errorf("[%s] Write modified UA line error: %v", destAddrPort, err)
 					return
 				}
+
+				statsModifiedRequests.Add(1)
 
 				if force_replace {
 					logrus.Debugf("[%s] UA modified (forced): %s -> %s", destAddrPort, uaStr, finalUA)
