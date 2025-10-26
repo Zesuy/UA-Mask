@@ -73,7 +73,7 @@ define Package/ua3f-tproxy-ipt
 	TITLE:=A transparent proxy for changing User-Agent (iptables)
 	URL:=https://github.com/Zesuy/UA3F-tproxy
 	DEPENDS:=$(GO_ARCH_DEPENDS) +luci-compat +firewall +kmod-ipt-tproxy
-	CONFLICTS:=ua3f-tproxy
+	CONFLICTS:=ua3f-tproxy firewall4
 endef
 
 define Package/ua3f-tproxy-ipt/description
