@@ -35,7 +35,7 @@ end
 ua3f_tproxy = Map("ua3f-tproxy",
     "UA3F-TPROXY",
     [[
-        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.2.1</a>
+        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.2.2</a>
         <br>
         用于修改 User-Agent 的透明代理,使用 TPROXY 技术实现。
         <br>

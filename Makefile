@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 # 1. 修改包名和版本
 PKG_NAME:=ua3f-tproxy
-PKG_VERSION:=0.2.1
+PKG_VERSION:=0.2.2
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Zesuy <hongri580@gmail.com>
@@ -73,7 +73,7 @@ define Package/ua3f-tproxy-ipt
 	TITLE:=A transparent proxy for changing User-Agent (iptables)
 	URL:=https://github.com/Zesuy/UA3F-tproxy
 	DEPENDS:=$(GO_ARCH_DEPENDS) +luci-compat +firewall +kmod-ipt-tproxy
-	CONFLICTS:=ua3f-tproxy
+	CONFLICTS:=ua3f-tproxy firewall4
 endef
 
 define Package/ua3f-tproxy-ipt/description
