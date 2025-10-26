@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -23,7 +24,7 @@ import (
 )
 
 var (
-	version              = "0.1.0"
+	version              = "0.2.2"
 	userAgent            string
 	port                 int
 	logLevel             string
@@ -200,7 +201,7 @@ func handleConnection(clientConn *net.TCPConn) {
 		}()
 	} else {
 		// 未命中缓存，进行 UA 修改
-		logrus.Debugf("[%s] Cache miss, processing Client -> Server", destAddrPort)
+		logrus.Debugf("[%s] not a cached https processing Client -> Server", destAddrPort)
 		go func() {
 			defer serverConn.CloseWrite()
 			modifyAndForward(serverConn, clientConn, destAddrPort)
@@ -317,49 +318,34 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 		return
 	}
 
-	logrus.Debugf("[%s] HTTP detected, processing with streaming parser...", destAddrPort)
+	logrus.Debugf("[%s] HTTP detected, processing with go prase", destAddrPort)
 
-	uaFound := false // 标记是否找到了 UA
-
-	// 2. 开始逐行扫描 HTTP Headers
 	for {
-		// 3. 逐行读取 Header
-		line, err := srcReader.ReadString('\n')
+		// 3. 使用 Go 标准库解析 HTTP 头部
+		request, err := http.ReadRequest(srcReader)
 		if err != nil {
-			if err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
-				logrus.Debugf("[%s] Read header line error: %v", destAddrPort, err)
+			// 如果是 EOF 或连接关闭，是正常退出
+			if err == io.EOF || strings.Contains(err.Error(), "use of closed network connection") {
+				logrus.Debugf("[%s] Connection closed (EOF or closed)", destAddrPort)
+			} else if strings.Contains(err.Error(), "connection reset by peer") {
+				logrus.Debugf("[%s] Connection reset", destAddrPort)
 			} else {
-				logrus.Debugf("[%s] Connection closed while reading headers", destAddrPort)
+				// 其他解析错误
+				logrus.Debugf("[%s] HTTP read request error: %v", destAddrPort, err)
 			}
-			return // 连接关闭或读取错误
+			return
 		}
 
-		// 4. 检查是否是 Header 的结尾 (空行)
-		if line == "\r\n" || line == "\n" {
-			// Header 结束
-			if !uaFound {
-				// 整个 Header 都读完了，也没找到 User-Agent
-				logrus.Debugf("[%s] No User-Agent header, skip modification. ", destAddrPort)
-			}
+		// 统计 HTTP 请求
+		statsHttpRequests.Add(1)
 
-			// 将 Header 的结尾（空行）写入目标
-			if _, err = io.WriteString(dst, line); err != nil {
-				logrus.Errorf("[%s] Write header end error: %v", destAddrPort, err)
-				return
-			}
+		// 4. 获取 User-Agent
+		uaStr := request.Header.Get("User-Agent")
+		uaFound := uaStr != ""
 
-			logrus.Debugf("[%s] Header end, continuing line-by-line scan for body or next request", destAddrPort)
-			uaFound = false
-			statsHttpRequests.Add(1)
-			continue
-		}
-
-		// 6. 检查是否是 User-Agent 行
-		if len(line) > 11 && strings.EqualFold(line[:11], "user-agent:") {
-			uaFound = true
-			// 提取 UA 字符串
-			uaStr := strings.TrimSpace(line[11:])
-
+		if !uaFound {
+			logrus.Debugf("[%s] No User-Agent header, skip modification.", destAddrPort)
+		} else {
 			var shouldReplace bool
 			if force_replace {
 				// 强制替换模式：忽略白名单和正则
@@ -385,7 +371,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 					}
 				}
 
-				if isMatchUaPattern {
+				if isMatchUaPattern && uaFound {
 					statsRegexHits.Add(1)
 				}
 
@@ -410,19 +396,8 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				// userAgent 是替换字符串, e.g., "FFF"
 				finalUA := buildNewUA(uaStr, userAgent, uaRegexp, enablePartialReplace)
 
-				// 构造新行，同时必须保留原始的行尾 (CRLF 或 LF)
-				var newLine string
-				if strings.HasSuffix(line, "\r\n") {
-					newLine = fmt.Sprintf("User-Agent: %s\r\n", finalUA)
-				} else {
-					newLine = fmt.Sprintf("User-Agent: %s\n", finalUA)
-				}
-
-				// 写入修改后的行
-				if _, err = io.WriteString(dst, newLine); err != nil {
-					logrus.Errorf("[%s] Write modified UA line error: %v", destAddrPort, err)
-					return
-				}
+				// 使用 .Set() 来修改 Header
+				request.Header.Set("User-Agent", finalUA)
 
 				statsModifiedRequests.Add(1)
 
@@ -435,21 +410,18 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 						logrus.Debugf("[%s] UA fully modified: %s -> %s", destAddrPort, uaStr, finalUA)
 					}
 				}
-			} else {
-				// 不替换 (原因已在上面 log)
-				// 写入原始行
-				if _, err = io.WriteString(dst, line); err != nil {
-					logrus.Errorf("[%s] Write original UA line error: %v", destAddrPort, err)
-					return
-				}
 			}
-
-		} else {
-			// 7. 不是 UA 行，也不是空行，说明是其他 Header，原样写入
-			if _, err = io.WriteString(dst, line); err != nil {
-				logrus.Errorf("[%s] Write header line error: %v", destAddrPort, err)
-				return
-			}
+		} // 循环，回到第 3 步，等待下一个 http.ReadRequest
+		// 6. 将头部写回目标
+		if err = request.Write(dst); err != nil {
+			logrus.Errorf("[%s] Write modified headers error: %v", destAddrPort, err)
+			request.Body.Close()
+			return
 		}
-	} // 循环读取下一行 Header
+
+		// 8. 关闭 Body，准备读取下一个 Keep-Alive 请求
+		request.Body.Close()
+		bodySize := request.ContentLength
+		logrus.Debugf("[%s] Request processed, body size: %d. Waiting for next request...", destAddrPort, bodySize)
+	}
 }
