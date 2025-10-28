@@ -387,13 +387,17 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			} else {
 				logrus.Debugf("[%s] isHTTP check in loop error: %v", destAddrPort, err)
 			}
-			io.Copy(dst, srcReader)
+			buf := bufferPool.Get().([]byte)
+			io.CopyBuffer(dst, srcReader, buf)
+			bufferPool.Put(buf)
 			return
 		}
 
 		if !is_http_again {
 			logrus.Debugf("[%s] Protocol switch detected. Changing to direct relay mode.", destAddrPort)
-			io.Copy(dst, srcReader)
+			buf := bufferPool.Get().([]byte)
+			io.CopyBuffer(dst, srcReader, buf)
+			bufferPool.Put(buf)
 			return
 		}
 		// 3. 使用 Go 标准库解析 HTTP 头部
