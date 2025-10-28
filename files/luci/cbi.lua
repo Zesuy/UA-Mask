@@ -98,18 +98,33 @@ main:tab("softlog", "应用日志")
 -- === Tab 1: 常规设置 (UA 相关) ===
 port = main:taboption("general", Value, "port", "监听端口")
 port.placeholder = "12032"
+port.default = "12032"
 port.datatype = "port"
+
+log_level = main:taboption("general", ListValue, "log_level", "日志等级")
+log_level.default = "info"
+log_level:value("debug", "调试(debug)")
+log_level:value("info", "信息(info)")
+log_level:value("warn", "警告(warn)")
+log_level:value("error", "错误(error)")
+log_level:value("fatal", "致命(fatal)")
+log_level:value("panic", "崩溃(panic)")
+
+log_file = main:taboption("general", Value, "log_file", "应用日志路径")
+log_file.placeholder = "/tmp/ua3f-tproxy/ua3f-tproxy.log"
+log_file.description = "指定 Go 程序运行时日志的输出文件路径。留空将禁用文件日志。"
 
 -- 新增：运行模式
 operating_profile = main:taboption("general", ListValue, "operating_profile", "运行模式",
     "选择程序的性能配置。<br>" ..
-    "<b>高性能:</b> 针对 MIPS 等低内存、低 CPU 平台优化，降低资源消耗。<br>" ..
-    "<b>均衡:</b> 适用于 ARM/x86 等性能较强的设备，提供更高的吞吐性能。")
-operating_profile:value("performance", "高性能模式 (推荐 MIPS/低配路由)")
-operating_profile:value("balanced", "均衡模式 (推荐 ARM/x86/软路由)")
-operating_profile.default = "performance"
+    "<b>高吞吐:</b> 适用于 ARM/x86 等性能较强的设备，提供更高的吞吐性能。<br>" ..
+    "<b>节约内存:</b> 针对 MIPS 等低内存、低 CPU 平台优化，降低资源消耗。")
+operating_profile:value("high_throughput", "高吞吐模式 (推荐 ARM/x86/软路由)")
+operating_profile:value("low_memory", "节约内存模式 (推荐 MIPS/低配路由)")
+operating_profile.default = "high_throughput"
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
+ua.default = "FFF"
 ua.placeholder = "FFF"
 ua.description = "用于替换的 User-Agent 字符串。"
 
@@ -124,12 +139,14 @@ match_mode.default = "keywords"
 -- 仅在 keywords 模式下显示
 keywords = main:taboption("general", Value, "keywords", "关键词列表")
 keywords:depends("match_mode", "keywords")
-keywords.placeholder = "iPhone,iPad,Android,Macintosh,Windows"
-keywords.description = "当 UA 包含列表中的任意关键词时，触发修改。用逗号分隔。"
+keywords.placeholder = "iPhone,iPad,Android,Macintosh,Windows,Linux"
+keywords.default = "iPhone,iPad,Android,Macintosh,Windows,Linux"
+keywords.description = "当 UA 包含列表中的任意关键词时，替换整个ua为目标值。用逗号分隔。"
 
 -- 仅在 regex 模式下显示
 ua_regex = main:taboption("general", Value, "ua_regex", "正则表达式")
 ua_regex:depends("match_mode", "regex")
+ua_regex.default = "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
 ua_regex.placeholder = "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
 ua_regex.description = "用于匹配 User-Agent 的正则表达式。"
 
@@ -151,10 +168,12 @@ whitelist.description = "指定不进行替换的 User-Agent，用逗号分隔 (
 
 iface = main:taboption("network", Value, "iface", "监听接口")
 iface.placeholder = "br-lan"
+iface.default = "br-lan"
 iface.description = "指定监听的lan口"
 
 bypass_gid = main:taboption("network", Value, "bypass_gid", "绕过 GID")
 bypass_gid.placeholder = "65533"
+bypass_gid.default = "65533"
 bypass_gid.datatype = "uinteger"
 bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。"
 
@@ -167,6 +186,7 @@ bypass_ports.description = "豁免的目标端口，用空格分隔 (如: '22 44
 
 bypass_ips = main:taboption("network", Value, "bypass_ips", "绕过目标 IP")
 bypass_ips.placeholder = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
+bypass_ips.default = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
 bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 
 

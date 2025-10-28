@@ -165,14 +165,16 @@ start_service() {
 
     #  处理“运行模式”
     local operating_profile
-    config_get operating_profile "main" "operating_profile" "performance"
-    if [ "$operating_profile" = "performance" ]; then
-        logger -t "$NAME" "Starting in High-Performance mode."
+    config_get operating_profile "main" "operating_profile" "low_memory"
+    if [ "$operating_profile" = "low_memory" ];
+    then
+        logger -t "$NAME" "Starting in Low-Memory mode."
         # 为 Go 程序传递性能调优参数
         procd_append_param command -cache-size 200
         procd_append_param command -buffer-size 4096
     else
-        logger -t "$NAME" "Starting in Balanced mode."
+        # 默认为 high_throughput
+        logger -t "$NAME" "Starting in High-Throughput mode."
         # 使用 Go 程序的默认值或更大的值
         procd_append_param command -cache-size 1000
         procd_append_param command -buffer-size 8192
