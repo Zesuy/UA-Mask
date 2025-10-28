@@ -32,6 +32,7 @@ var (
 	force_replace        bool
 	enablePartialReplace bool
 	cache                *expirable.LRU[string, string]
+	uaCache              *expirable.LRU[string, string]
 	uaPattern            string
 	uaRegexp             *regexp.Regexp
 	logFile              string
@@ -127,6 +128,8 @@ func main() {
 		FullTimestamp: true,
 	})
 	cache = expirable.NewLRU[string, string](300, nil, time.Second*600)
+	//key: originUa, value: finalUa
+	uaCache = expirable.NewLRU[string, string](1000, nil, time.Second*600)
 
 	// 打印配置信息
 	logrus.Infof("UA3F-TPROXY v%s", version)
@@ -342,63 +345,78 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 		if !uaFound {
 			logrus.Debugf("[%s] No User-Agent header, skip modification.", destAddrPort)
 		} else {
-			var shouldReplace bool
-			if force_replace {
-				// 强制替换模式：忽略白名单和正则
-				shouldReplace = true
-				logrus.Debugf("[%s] Force replacing User-Agent: %s", destAddrPort, uaStr)
-			} else {
-				// 默认模式：检查白名单和正则
-				isInWhiteList := false
-				for _, v := range whitelist {
-					if v == uaStr {
-						isInWhiteList = true
-						break
-					}
-				}
-
-				isMatchUaPattern := true // 默认为 true
-				if uaRegexp != nil {
-					isMatchUaPattern = uaRegexp.MatchString(uaStr)
-				}
-
-				if isMatchUaPattern && uaFound {
-					statsRegexHits.Add(1)
-				}
-
-				shouldReplace = !isInWhiteList && isMatchUaPattern
-
-				if !shouldReplace {
-					// 记录不替换的原因并加入缓存
-					if isInWhiteList {
-						logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. ", destAddrPort, uaStr)
-					} else { // 意味着 !isMatchUaPattern
-						logrus.Debugf("[%s] Not Hit User-Agent Pattern: %s. ", destAddrPort, uaStr)
-					}
-				} else {
-					logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
-				}
-			}
-
-			// 根据 shouldReplace 标志执行操作
-			if shouldReplace {
-				// 调用 buildNewUA 来获取最终的 UA 字符串
-				// uaStr 是原始 UA 值, e.g., "Mozilla/5.0 (iPhone; ...)"
-				// userAgent 是替换字符串, e.g., "FFF"
-				finalUA := buildNewUA(uaStr, userAgent, uaRegexp, enablePartialReplace)
-
-				// 使用 .Set() 来修改 Header
+			if finalUA, ok := uaCache.Get(uaStr); ok {
+				// 命中 UA 缓存，直接使用缓存的 finalUA
 				request.Header.Set("User-Agent", finalUA)
-
-				statsModifiedRequests.Add(1)
-
-				if force_replace {
-					logrus.Debugf("[%s] UA modified (forced): %s -> %s", destAddrPort, uaStr, finalUA)
+				if finalUA != uaStr {
+					statsModifiedRequests.Add(1)
+					logrus.Debugf("[%s] UA modified (cached): %s -> %s", destAddrPort, uaStr, finalUA)
 				} else {
-					if enablePartialReplace && finalUA != userAgent {
-						logrus.Debugf("[%s] UA partially modified: %s -> %s", destAddrPort, uaStr, finalUA)
+					logrus.Debugf("[%s] UA not modified (cached): %s", destAddrPort, uaStr)
+				}
+			} else {
+				// 未命中 UA 缓存，继续下面的逻辑
+				var shouldReplace bool
+				if force_replace {
+					// 强制替换模式：忽略白名单和正则
+					shouldReplace = true
+					logrus.Debugf("[%s] Force replacing User-Agent: %s", destAddrPort, uaStr)
+				} else {
+					// 默认模式：检查白名单和正则
+					isInWhiteList := false
+					for _, v := range whitelist {
+						if v == uaStr {
+							isInWhiteList = true
+							break
+						}
+					}
+
+					isMatchUaPattern := true // 默认为 true
+					if uaRegexp != nil {
+						isMatchUaPattern = uaRegexp.MatchString(uaStr)
+					}
+
+					if isMatchUaPattern && uaFound {
+						statsRegexHits.Add(1)
+					}
+
+					shouldReplace = !isInWhiteList && isMatchUaPattern
+
+					if !shouldReplace {
+						// 记录不替换的原因并加入缓存
+						if isInWhiteList {
+							logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. ", destAddrPort, uaStr)
+						} else { // 意味着 !isMatchUaPattern
+							logrus.Debugf("[%s] Not Hit User-Agent Pattern: %s. ", destAddrPort, uaStr)
+						}
+						uaCache.Add(uaStr, uaStr) //缓存不修改的UA
 					} else {
-						logrus.Debugf("[%s] UA fully modified: %s -> %s", destAddrPort, uaStr, finalUA)
+						logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
+					}
+				}
+
+				// 根据 shouldReplace 标志执行操作
+				if shouldReplace {
+					// 调用 buildNewUA 来获取最终的 UA 字符串
+					// uaStr 是原始 UA 值, e.g., "Mozilla/5.0 (iPhone; ...)"
+					// userAgent 是替换字符串, e.g., "FFF"
+					finalUA := buildNewUA(uaStr, userAgent, uaRegexp, enablePartialReplace)
+
+					// 使用 .Set() 来修改 Header
+					request.Header.Set("User-Agent", finalUA)
+
+					statsModifiedRequests.Add(1)
+
+					uaCache.Add(uaStr, finalUA) //缓存修改后的UA
+
+					if force_replace {
+						logrus.Debugf("[%s] UA modified (forced): %s -> %s", destAddrPort, uaStr, finalUA)
+					} else {
+						if enablePartialReplace && finalUA != userAgent {
+							logrus.Debugf("[%s] UA partially modified: %s -> %s", destAddrPort, uaStr, finalUA)
+						} else {
+							logrus.Debugf("[%s] UA fully modified: %s -> %s", destAddrPort, uaStr, finalUA)
+						}
 					}
 				}
 			}
