@@ -48,6 +48,8 @@ var (
 	statsHttpRequests      atomic.Uint64 // 已处理 HTTP 请求总数
 	statsRegexHits         atomic.Uint64 // 正则命中总数
 	statsModifiedRequests  atomic.Uint64 // 成功篡改总数
+	statsCacheHits         atomic.Uint64 // 缓存命中总数
+	statsCacheRatios       atomic.Uint64 // 缓存命中率
 
 	// bufio.Reader 池
 	bufioReaderPool = sync.Pool{
@@ -74,17 +76,31 @@ func startStatsWriter(filePath string, interval time.Duration) {
 		regexHits := statsRegexHits.Load()
 		modified := statsModifiedRequests.Load()
 		activeConn := statsActiveConnections.Load()
+		cacheHits := statsCacheHits.Load()
+
+		var cacheRatio uint64
+		var total = regexHits + cacheHits
+		if total > 0 {
+			cacheRatio = (cacheHits * 100) / total
+		} else {
+			cacheRatio = 0
+		}
+		statsCacheRatios.Store(cacheRatio)
 
 		// 格式化为简单的 key:value 格式
 		content := fmt.Sprintf(
 			"active_connections:%d\n"+
 				"http_requests:%d\n"+
 				"regex_hits:%d\n"+
-				"modifications_done:%d\n",
+				"modifications_done:%d\n"+
+				"cache_hits:%d\n"+
+				"cache_ratio:%d\n",
 			activeConn,
 			httpRequests,
 			regexHits,
 			modified,
+			cacheHits,
+			cacheRatio,
 		)
 
 		err := os.WriteFile(filePath, []byte(content), 0644)
@@ -393,6 +409,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 				// 命中 UA 缓存，直接使用缓存的 finalUA
 				request.Header.Set("User-Agent", finalUA)
 				if finalUA != uaStr {
+					statsCacheHits.Add(1)
 					statsModifiedRequests.Add(1)
 					logrus.Debugf("[%s] UA modified (cached): %s -> %s", destAddrPort, uaStr, finalUA)
 				} else {

@@ -70,11 +70,13 @@ stats_display.cfgvalue = function(self, section)
     local http = stats["http_requests"] or "0"
     local regex = stats["regex_hits"] or "0"
     local modified = stats["modifications_done"] or "0"
+    local cache_hits = stats["cache_hits"] or "0"
+    local cache_ratio = stats["cache_ratio"] or "0"
 
-    -- 格式化为单行
     return string.format(
-        "<b>当前连接:</b> %s | <b>HTTP请求:</b> %s | <b>正则匹配:</b> %s | <b>成功修改:</b> %s",
-        active, http, regex, modified
+        "<b>当前连接:</b> %s | <b>HTTP请求:</b> %s | <b>正则匹配:</b> %s<br>" ..
+        "<b>缓存命中:</b> %s | <b>成功修改:</b> %s | <b>缓存率:</b> %s%%",
+        active, http, regex, cache_hits,modified, cache_ratio
     )
 end
 
