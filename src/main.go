@@ -25,14 +25,13 @@ import (
 )
 
 var (
-	version              = "0.2.2"
+	version              = "0.3.0"
 	userAgent            string
 	port                 int
 	logLevel             string
 	showVer              bool
 	force_replace        bool
 	enablePartialReplace bool
-	cache                *expirable.LRU[string, string]
 	uaCache              *expirable.LRU[string, string]
 	uaPattern            string
 	uaRegexp             *regexp.Regexp
@@ -208,7 +207,6 @@ func main() {
 	logrus.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})
-	cache = expirable.NewLRU[string, string](300, nil, time.Second*600)
 	//key: originUa, value: finalUa
 	uaCache = expirable.NewLRU[string, string](1000, nil, time.Second*600)
 
@@ -276,26 +274,11 @@ func handleConnection(clientConn *net.TCPConn) {
 	done := make(chan struct{}, 2)
 
 	// 客户端 -> 服务器 (需要修改 UA)
-	if cache.Contains(destAddrPort) {
-		// 命中缓存，直接转发
-		logrus.Debugf("[%s] Hit LRU cache, direct relaying Client -> Server", destAddrPort)
-		go func() {
-			defer serverConn.CloseWrite()
-			// 使用带缓冲区的 Copy
-			buf := bufferPool.Get().([]byte)
-			io.CopyBuffer(serverConn, clientConn, buf)
-			bufferPool.Put(buf) // 放回池中
-			done <- struct{}{}
-		}()
-	} else {
-		// 未命中缓存，进行 UA 修改
-		logrus.Debugf("[%s] not a cached https processing Client -> Server", destAddrPort)
-		go func() {
-			defer serverConn.CloseWrite()
-			modifyAndForward(serverConn, clientConn, destAddrPort)
-			done <- struct{}{}
-		}()
-	}
+	go func() {
+		defer serverConn.CloseWrite()
+		modifyAndForward(serverConn, clientConn, destAddrPort)
+		done <- struct{}{}
+	}()
 
 	// 服务器 -> 客户端 (直接转发)
 	go func() {
@@ -393,28 +376,10 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	srcReader.Reset(src)
 	defer bufioReaderPool.Put(srcReader)
 
-	// 1. 检查是否是 HTTP 请求
-	is_http, err := isHTTP(srcReader)
-	if err != nil {
-		if strings.Contains(err.Error(), "use of closed network connection") {
-			logrus.Warnf("[%s] isHTTP error: %s", destAddrPort, err.Error())
-			return
-		}
-	}
-	if !is_http && err == nil {
-		logrus.Debugf("[%s] Not HTTP, direct relay. Adding to LRU cache.", destAddrPort)
-		cache.Add(destAddrPort, destAddrPort)
-
-		buf := bufferPool.Get().([]byte)
-		io.CopyBuffer(dst, srcReader, buf)
-		bufferPool.Put(buf)
-		return
-	}
-
 	logrus.Debugf("[%s] HTTP detected, processing with go prase", destAddrPort)
 
 	for {
-		is_http_again, err := isHTTP(srcReader)
+		is_http, err := isHTTP(srcReader)
 		if err != nil {
 			if err == io.EOF || strings.Contains(err.Error(), "use of closed network connection") {
 				logrus.Debugf("[%s] Connection closed (EOF or closed in loop)", destAddrPort)
@@ -427,7 +392,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			return
 		}
 
-		if !is_http_again {
+		if !is_http {
 			logrus.Debugf("[%s] Protocol switch detected. Changing to direct relay mode.", destAddrPort)
 			buf := bufferPool.Get().([]byte)
 			io.CopyBuffer(dst, srcReader, buf)
