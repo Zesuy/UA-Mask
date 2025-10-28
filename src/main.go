@@ -274,7 +274,8 @@ func handleConnection(clientConn *net.TCPConn) {
 		done <- struct{}{}
 	}()
 
-	// 等待任意一个方向结束
+	// 改为等待两个方向的转发完成，防止竞态
+	<-done
 	<-done
 }
 
