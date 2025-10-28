@@ -321,6 +321,22 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	logrus.Debugf("[%s] HTTP detected, processing with go prase", destAddrPort)
 
 	for {
+		is_http_again, err := isHTTP(srcReader)
+		if err != nil {
+			if err == io.EOF || strings.Contains(err.Error(), "use of closed network connection") {
+				logrus.Debugf("[%s] Connection closed (EOF or closed in loop)", destAddrPort)
+			} else {
+				logrus.Debugf("[%s] isHTTP check in loop error: %v", destAddrPort, err)
+			}
+			io.Copy(dst, srcReader)
+			return
+		}
+
+		if !is_http_again {
+			logrus.Debugf("[%s] Protocol switch detected. Changing to direct relay mode.", destAddrPort)
+			io.Copy(dst, srcReader)
+			return
+		}
 		// 3. 使用 Go 标准库解析 HTTP 头部
 		request, err := http.ReadRequest(srcReader)
 		if err != nil {
