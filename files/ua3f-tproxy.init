@@ -162,7 +162,7 @@ start_service() {
     
     config_get port "main" "port" "12032"
     config_get ua "main" "ua" "FFF"
-    config_get log_level "main" "log_level" "debug"
+    config_get log_level "main" "log_level" "info"
     config_get ua_regex "main" "ua_regex" "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
     config_get log_file "main" "log_file" "/tmp/ua3f-tproxy/ua3f-tproxy.log"
     mkdir -p /tmp/ua3f-tproxy
