@@ -36,7 +36,7 @@ var (
 	uaPattern            string
 	uaRegexp             *regexp.Regexp
 	logFile              string
-	HTTP_METHOD          = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
+	HTTP_METHOD          = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT", "PATCH"}
 	whitelistArg         string
 	whitelist            = []string{
 		"MicroMessenger Client",
