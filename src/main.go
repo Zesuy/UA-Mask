@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -46,6 +47,21 @@ var (
 	statsHttpRequests      atomic.Uint64 // 已处理 HTTP 请求总数
 	statsRegexHits         atomic.Uint64 // 正则命中总数
 	statsModifiedRequests  atomic.Uint64 // 成功篡改总数
+
+	// bufio.Reader 池
+	bufioReaderPool = sync.Pool{
+		New: func() any {
+			return bufio.NewReaderSize(nil, 16*1024)
+		},
+	}
+
+	//io.Copy 使用的缓冲区
+	bufferPool = sync.Pool{
+		New: func() any {
+			buf := make([]byte, 32*1024)
+			return &buf
+		},
+	}
 )
 
 func startStatsWriter(filePath string, interval time.Duration) {
@@ -199,7 +215,10 @@ func handleConnection(clientConn *net.TCPConn) {
 		logrus.Debugf("[%s] Hit LRU cache, direct relaying Client -> Server", destAddrPort)
 		go func() {
 			defer serverConn.CloseWrite()
-			io.Copy(serverConn, clientConn)
+			// 使用带缓冲区的 Copy
+			buf := bufferPool.Get().([]byte)
+			io.CopyBuffer(serverConn, clientConn, buf)
+			bufferPool.Put(buf) // 放回池中
 			done <- struct{}{}
 		}()
 	} else {
@@ -215,7 +234,10 @@ func handleConnection(clientConn *net.TCPConn) {
 	// 服务器 -> 客户端 (直接转发)
 	go func() {
 		defer clientConn.CloseWrite()
-		io.Copy(clientConn, serverConn)
+		// 使用带缓冲区的 Copy
+		buf := bufferPool.Get().([]byte)
+		io.CopyBuffer(clientConn, serverConn, buf)
+		bufferPool.Put(buf) // 放回池中
 		done <- struct{}{}
 	}()
 
@@ -300,7 +322,9 @@ func buildNewUA(originUA string, replacementUA string, uaRegexp *regexp.Regexp, 
 
 // 修改 User-Agent 并转发数据
 func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
-	srcReader := bufio.NewReader(src)
+	srcReader := bufioReaderPool.Get().(*bufio.Reader)
+	srcReader.Reset(src)
+	defer bufioReaderPool.Put(srcReader)
 
 	// 1. 检查是否是 HTTP 请求
 	is_http, err := isHTTP(srcReader)
@@ -313,7 +337,10 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	if !is_http && err == nil {
 		logrus.Debugf("[%s] Not HTTP, direct relay. Adding to LRU cache.", destAddrPort)
 		cache.Add(destAddrPort, destAddrPort)
-		io.Copy(dst, srcReader) // 转发非 HTTP 数据
+
+		buf := bufferPool.Get().([]byte)
+		io.CopyBuffer(dst, srcReader, buf)
+		bufferPool.Put(buf)
 		return
 	}
 
