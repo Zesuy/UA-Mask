@@ -11,12 +11,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/dlclark/regexp2"
 	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -33,7 +33,7 @@ var (
 	enablePartialReplace bool
 	cache                *expirable.LRU[string, string]
 	uaPattern            string
-	uaRegexp             *regexp2.Regexp
+	uaRegexp             *regexp.Regexp
 	logFile              string
 	HTTP_METHOD          = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
 	whitelist            = []string{
@@ -91,7 +91,7 @@ func main() {
 	// 编译 UA 正则表达式
 	uaPattern = "(?i)" + uaPattern
 	var err error
-	uaRegexp, err = regexp2.Compile(uaPattern, regexp2.None)
+	uaRegexp, err = regexp.Compile(uaPattern)
 	if err != nil {
 		logrus.Fatalf("Invalid User-Agent Regex Pattern: %v", err)
 	}
@@ -285,14 +285,10 @@ func isHTTP(reader *bufio.Reader) (bool, error) {
 }
 
 // buildNewUA 根据是否启用部分替换来构造新的 User-Agent 字符串
-func buildNewUA(originUA string, replacementUA string, uaRegexp *regexp2.Regexp, enablePartialReplace bool) string {
+func buildNewUA(originUA string, replacementUA string, uaRegexp *regexp.Regexp, enablePartialReplace bool) string {
 	if enablePartialReplace && uaRegexp != nil {
 		// 启用部分替换：使用正则替换
-		newUaHearder, err := uaRegexp.Replace(originUA, replacementUA, -1, -1)
-		if err != nil {
-			logrus.Error(fmt.Sprintf("User-Agent Replace Error: %s", err.Error()))
-			return replacementUA // 替换出错时，回退到完整替换
-		}
+		newUaHearder := uaRegexp.ReplaceAllString(originUA, replacementUA)
 		return newUaHearder
 	}
 	// 默认完整替换
@@ -363,12 +359,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 
 				isMatchUaPattern := true // 默认为 true
 				if uaRegexp != nil {
-					var err error
-					isMatchUaPattern, err = uaRegexp.MatchString(uaStr)
-					if err != nil {
-						logrus.Errorf("[%s] User-Agent Regex Pattern Match Error: %v", destAddrPort, err)
-						isMatchUaPattern = true // 如果匹配出错，假定匹配成功
-					}
+					isMatchUaPattern = uaRegexp.MatchString(uaStr)
 				}
 
 				if isMatchUaPattern && uaFound {
