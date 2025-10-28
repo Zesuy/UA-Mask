@@ -100,41 +100,50 @@ port = main:taboption("general", Value, "port", "监听端口")
 port.placeholder = "12032"
 port.datatype = "port"
 
-log_level = main:taboption("general", ListValue, "log_level", "日志等级")
-log_level:value("debug", "调试(debug)")
-log_level:value("info", "信息(info)")
-log_level:value("warn", "警告(warn)")
-log_level:value("error", "错误(error)")
-log_level:value("fatal", "致命(fatal)")
-log_level:value("panic", "崩溃(panic)")
-
-log_file = main:taboption("general", Value, "log_file", "应用日志路径")
-log_file.placeholder = "/tmp/ua3f-tproxy/ua3f-tproxy.log"
-log_file.description = "指定 Go 程序运行时日志的输出文件路径。留空将禁用文件日志。"
-log_file.default = "/tmp/ua3f-tproxy/ua3f-tproxy.log"
+-- 新增：运行模式
+operating_profile = main:taboption("general", ListValue, "operating_profile", "运行模式",
+    "选择程序的性能配置。<br>" ..
+    "<b>高性能:</b> 针对 MIPS 等低内存、低 CPU 平台优化，降低资源消耗。<br>" ..
+    "<b>均衡:</b> 适用于 ARM/x86 等性能较强的设备，提供更高的吞吐性能。")
+operating_profile:value("performance", "高性能模式 (推荐 MIPS/低配路由)")
+operating_profile:value("balanced", "均衡模式 (推荐 ARM/x86/软路由)")
+operating_profile.default = "performance"
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
 ua.placeholder = "FFF"
-ua.description = "用于替换设备标识的 User-Agent 字符串，当部分替换启用时，用当前值替换匹配到的部分。"
+ua.description = "用于替换的 User-Agent 字符串。"
 
-ua_mode = main:taboption("general", ListValue, "ua_mode", "UA 修改模式")
-ua_mode:value("smart_partial", "正则替换(部分)")
-ua_mode:value("smart_full", "正则替换(全量)")
-ua_mode:value("force_full", "全局替换")
-ua_mode.default = "smart_full" 
-ua_mode.description = "选择 User-Agent 的替换模式：<br />" ..
-                      "<b>正则替换(部分):</b> 仅当UA匹配正则时，才替换UA中的匹配部分。<br />" ..
-                      "<b>正则替换(全量):</b> 仅当UA匹配正则时，才将整个UA替换为新值。<br />" ..
-                      "<b>全局替换:</b> 忽略正则，强制将所有流量的UA替换为新值。"
+-- 重构：匹配规则
+match_mode = main:taboption("general", ListValue, "match_mode", "匹配规则",
+    "定义如何确定哪些流量需要被修改。")
+match_mode:value("keywords", "基于关键词 (最快，推荐)")
+match_mode:value("regex", "基于正则表达式 (灵活)")
+match_mode:value("all", "修改所有流量 (强制)")
+match_mode.default = "keywords"
 
-uaRegexPattern = main:taboption("general", Value, "ua_regex", "UA匹配正则")
-uaRegexPattern.placeholder = "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)"
-uaRegexPattern.description = "当不使用强制替换时，用于匹配 User-Agent 的正则表达式"
+-- 仅在 keywords 模式下显示
+keywords = main:taboption("general", Value, "keywords", "关键词列表")
+keywords:depends("match_mode", "keywords")
+keywords.placeholder = "iPhone,iPad,Android,Macintosh,Windows"
+keywords.description = "当 UA 包含列表中的任意关键词时，触发修改。用逗号分隔。"
 
+-- 仅在 regex 模式下显示
+ua_regex = main:taboption("general", Value, "ua_regex", "正则表达式")
+ua_regex:depends("match_mode", "regex")
+ua_regex.placeholder = "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
+ua_regex.description = "用于匹配 User-Agent 的正则表达式。"
+
+-- 仅在 regex 模式下显示
+replace_method = main:taboption("general", ListValue, "replace_method", "替换方式")
+replace_method:depends("match_mode", "regex")
+replace_method:value("full", "完整替换")
+replace_method:value("partial", "部分替换 (仅替换匹配内容)")
+replace_method.default = "full"
+replace_method.description = "<b>完整替换:</b> 将整个 UA 替换为新值。<br><b>部分替换:</b> 仅将 UA 中被正则匹配到的部分替换为新值。"
 
 whitelist = main:taboption("general", Value, "whitelist", "User-Agent 白名单")
 whitelist.placeholder = "MicroMessenger Client,ByteDancePcdn"
-whitelist.description = "指定不进行 User-Agent 替换的关键字列表，用逗号分隔 (如: 'MicroMessenger Client,ByteDancePcdn')。"
+whitelist.description = "指定不进行替换的 User-Agent，用逗号分隔 (如: 'MicroMessenger Client,ByteDancePcdn')。"
 
 -- === Tab 2: 网络与防火墙 (网络、日志等级、防火墙相关) ===
 

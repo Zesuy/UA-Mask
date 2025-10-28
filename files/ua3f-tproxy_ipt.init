@@ -124,8 +124,7 @@ start_service() {
 
     local enabled
     config_get_bool enabled "enabled" "enabled" "0"
-    if [ "$enabled" -ne "1" ];
-    then
+    if [ "$enabled" -ne "1" ]; then
         return 1
     fi
 
@@ -133,77 +132,94 @@ start_service() {
     config_get_bool proxy_host "main" "proxy_host" "0"
 
     if [ "$proxy_host" = "1" ]; then
-        # 1. 启用代理本机时确保组存在
         setup_group 
     fi
-    # 2. 读取 procd 启动所需的配
-    local port
-    local ua
-    local log_level
-    
+
+    local port ua log_level log_file whitelist
     config_get port "main" "port" "12032"
     config_get ua "main" "ua" "FFF"
     config_get log_level "main" "log_level" "info"
-    config_get ua_regex "main" "ua_regex" "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
     config_get log_file "main" "log_file" "/tmp/ua3f-tproxy/ua3f-tproxy.log"
     config_get whitelist "main" "whitelist" ""
-    mkdir -p /tmp/ua3f-tproxy
+    
+    mkdir -p "$(dirname "$log_file")"
 
-    local ua_mode
-    local force_replace
-    local partial_replace
-    config_get ua_mode "main" "ua_mode" "smart_full"
-    if [ "$ua_mode" = "smart_full" ]; then
-        force_replace="0"
-        partial_replace="0"
-    elif [ "$ua_mode" = "smart_partial" ]; then
-        force_replace="0"
-        partial_replace="1"
-    elif [ "$ua_mode" = "force_full" ]; then
-        force_replace="1"
-        partial_replace="0"
-    else
-        force_replace="0"
-        partial_replace="0"
-    fi
-
-    # 4. 启动 procd 实例
     procd_open_instance "$NAME"
     procd_set_param command "$PROG"
 
-    # 5. 使用 append_param 逐个添加参数
+    #  使用 append_param 逐个添加参数
     if [ "$proxy_host" = "1" ]; then
+        # 仅当 proxy_host 启用时，才以特定组运行
         procd_set_param group "ua3f-tproxy" 
         logger -t "$NAME" "Running as group 'ua3f-tproxy' for host proxying."
     else
         logger -t "$NAME" "Running as default user (proxy_host is disabled)."
     fi
-    procd_append_param command -port "$port"
-    procd_append_param command -ua "$ua"
-    procd_append_param command -loglevel "$log_level"
-    procd_append_param command -r "$ua_regex"
-    procd_append_param command -w "$whitelist"
 
+    #  添加基础参数
+    procd_append_param command -port "$port"
+    procd_append_param command -u "$ua"
+    procd_append_param command -loglevel "$log_level"
+    procd_append_param command -w "$whitelist"
     [ -n "$log_file" ] && procd_append_param command -log "$log_file"
-    
-    if [ "$force_replace" = "1" ]; then
-        procd_append_param command -force
-        logger -t "$NAME" "Starting with -force enabled. Partial replace (-s) will be ignored."
-    elif [ "$partial_replace" = "1" ]; then
-        procd_append_param command -s
-        logger -t "$NAME" "Starting with partial replace (-s) enabled."
+
+    #  处理“运行模式”
+    local operating_profile
+    config_get operating_profile "main" "operating_profile" "performance"
+    if [ "$operating_profile" = "performance" ]; then
+        logger -t "$NAME" "Starting in High-Performance mode."
+        # 为 Go 程序传递性能调优参数
+        procd_append_param command -cache-size 200
+        procd_append_param command -buffer-size 4096
     else
-        logger -t "$NAME" "Starting with default (full) replace mode."
+        logger -t "$NAME" "Starting in Balanced mode."
+        # 使用 Go 程序的默认值或更大的值
+        procd_append_param command -cache-size 1000
+        procd_append_param command -buffer-size 8192
     fi
 
+    #  处理“匹配规则”
+    local match_mode
+    config_get match_mode "main" "match_mode" "keywords"
+    
+    case "$match_mode" in
+        "keywords")
+            local keywords
+            config_get keywords "main" "keywords" "iPhone,iPad,Android,Macintosh,Windows"
+            logger -t "$NAME" "Using keyword matching mode."
+            procd_append_param command -keywords "$keywords"
+            ;;
+        "regex")
+            local ua_regex replace_method
+            config_get ua_regex "main" "ua_regex" "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
+            config_get replace_method "main" "replace_method" "full"
+            
+            logger -t "$NAME" "Using regex matching mode."
+            procd_append_param command -enable-regex
+            procd_append_param command -r "$ua_regex"
+
+            if [ "$replace_method" = "partial" ]; then
+                logger -t "$NAME" "Partial replacement enabled."
+                procd_append_param command -s
+            else
+                logger -t "$NAME" "Full replacement enabled for regex match."
+            fi
+            ;;
+        "all")
+            logger -t "$NAME" "Using modify-all (force) mode."
+            procd_append_param command -force
+            ;;
+    esac
+
+    #  设置其他 procd 参数
     procd_set_param respawn    
     procd_set_param stdout 1   
     procd_set_param stderr 1  
 
     procd_close_instance
+    #  启动后自动设置防火墙
     set_firewall
 }
-
 # 服务停止逻辑 (不变)
 stop_service() {
     logger -t "$NAME" "Stopping $NAME..."

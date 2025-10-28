@@ -45,10 +45,15 @@ var (
 	}
 	statsActiveConnections atomic.Uint64 // 当前活跃连接数
 	statsHttpRequests      atomic.Uint64 // 已处理 HTTP 请求总数
-	statsRegexHits         atomic.Uint64 // 正则命中总数
 	statsModifiedRequests  atomic.Uint64 // 成功篡改总数
 	statsCacheHits         atomic.Uint64 // 缓存命中(修改)
 	statsCacheHitNoModify  atomic.Uint64 // 缓存命中(放行)
+
+	keywords     string
+	keywordsList []string
+	enableRegex  bool
+	cacheSize    int
+	bufferSize   int
 
 	// bufio.Reader 池
 	bufioReaderPool = sync.Pool{
@@ -143,16 +148,24 @@ func startStatsWriter(filePath string, interval time.Duration) {
 }
 
 func main() {
-	// 解析命令行参数
-	flag.StringVar(&userAgent, "ua", "FFF", "User-Agent string")
+	flag.StringVar(&userAgent, "u", "FFF", "User-Agent string")
 	flag.IntVar(&port, "port", 8080, "TPROXY listen port")
 	flag.StringVar(&logLevel, "loglevel", "info", "Log level (debug, info, warn, error)")
 	flag.BoolVar(&showVer, "v", false, "Show version")
-	flag.BoolVar(&force_replace, "force", false, "Force replace User-Agent, ignore whitelist and regex pattern")
-	flag.BoolVar(&enablePartialReplace, "s", false, "Enable Regex Partial Replace")
 	flag.StringVar(&logFile, "log", "", "Log file path (e.g., /tmp/ua3f-tproxy.log). Default is stdout.")
-	flag.StringVar(&uaPattern, "r", "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)", "UA-Pattern (Regex)")
 	flag.StringVar(&whitelistArg, "w", "", "Comma-separated User-Agent whitelist")
+
+	// 匹配模式相关
+	flag.BoolVar(&force_replace, "force", false, "Force replace User-Agent (match_mode 'all')")
+	flag.BoolVar(&enableRegex, "enable-regex", false, "Enable Regex matching mode")
+	flag.StringVar(&keywords, "keywords", "iPhone,iPad,Android,Macintosh,Windows", "Comma-separated User-Agent keywords (default mode)")
+	flag.StringVar(&uaPattern, "r", "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)", "UA-Pattern (Regex)")
+	flag.BoolVar(&enablePartialReplace, "s", false, "Enable Regex Partial Replace (regex mode + partial)")
+
+	// 性能调优
+	flag.IntVar(&cacheSize, "cache-size", 1000, "LRU cache size")
+	flag.IntVar(&bufferSize, "buffer-size", 8192, "I/O buffer size (bytes)")
+
 	flag.Parse()
 
 	if whitelistArg != "" {
@@ -169,17 +182,26 @@ func main() {
 		}
 	}
 
-	// 编译 UA 正则表达式
-	uaPattern = "(?i)" + uaPattern
-	var err error
-	uaRegexp, err = regexp.Compile(uaPattern)
-	if err != nil {
-		logrus.Fatalf("Invalid User-Agent Regex Pattern: %v", err)
-	}
-	// 显示版本
-	if showVer {
-		fmt.Printf("UA3F-TPROXY v%s\n", version)
-		return
+	if enableRegex {
+		uaPattern = "(?i)" + uaPattern
+		var err error
+		uaRegexp, err = regexp.Compile(uaPattern)
+		if err != nil {
+			logrus.Fatalf("Invalid User-Agent Regex Pattern: %v", err)
+		}
+	} else if !force_replace {
+		// 默认：关键词模式
+		parts := strings.Split(keywords, ",")
+		trimmed := make([]string, 0, len(parts))
+		for _, s := range parts {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				trimmed = append(trimmed, s)
+			}
+		}
+		if len(trimmed) > 0 {
+			keywordsList = trimmed
+		}
 	}
 
 	if logFile != "" {
@@ -207,17 +229,34 @@ func main() {
 	logrus.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})
+	bufioReaderPool = sync.Pool{
+		New: func() any {
+			return bufio.NewReaderSize(nil, bufferSize)
+		},
+	}
+
 	//key: originUa, value: finalUa
-	uaCache = expirable.NewLRU[string, string](1000, nil, time.Second*600)
+	uaCache = expirable.NewLRU[string, string](cacheSize, nil, time.Second*600)
 
 	// 打印配置信息
 	logrus.Infof("UA3F-TPROXY v%s", version)
 	logrus.Infof("Port: %d", port)
 	logrus.Infof("User-Agent: %s", userAgent)
-	logrus.Infof("User-Agent Regex Pattern: %s", uaPattern)
-	logrus.Infof("Enable Partial Replace: %v", enablePartialReplace)
 	logrus.Infof("Log level: %s", logLevel)
 	logrus.Infof("User-Agent Whitelist: %v", whitelist)
+	logrus.Infof("Cache Size: %d", cacheSize)
+	logrus.Infof("Buffer Size: %d", bufferSize)
+
+	if force_replace {
+		logrus.Infof("Mode: Force Replace (All)")
+	} else if enableRegex {
+		logrus.Infof("Mode: Regex")
+		logrus.Infof("User-Agent Regex Pattern: %s", uaPattern)
+		logrus.Infof("Enable Partial Replace: %v", enablePartialReplace)
+	} else {
+		logrus.Infof("Mode: Keywords")
+		logrus.Infof("Keywords: %v", keywordsList)
+	}
 
 	// 监听端口
 	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(0, 0, 0, 0), Port: port})
@@ -436,44 +475,57 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 					logrus.Debugf("[%s] UA not modified (cached): %s", destAddrPort, uaStr)
 				}
 			} else {
-				// 未命中 UA 缓存，继续下面的逻辑
+				// 未命中 UA 缓存，执行完整匹配逻辑
 				var shouldReplace bool
-				if force_replace {
-					// 强制替换模式：忽略白名单和正则
-					shouldReplace = true
-					logrus.Debugf("[%s] Force replacing User-Agent: %s", destAddrPort, uaStr)
+				var matchReason string
+
+				// 1. 检查白名单 (最高优先级)
+				isInWhiteList := false
+				for _, v := range whitelist {
+					if v == uaStr {
+						isInWhiteList = true
+						break
+					}
+				}
+
+				if isInWhiteList {
+					shouldReplace = false
+					matchReason = "Hit User-Agent Whitelist"
 				} else {
-					// 默认模式：检查白名单和正则
-					isInWhiteList := false
-					for _, v := range whitelist {
-						if v == uaStr {
-							isInWhiteList = true
-							break
+					// 2. 根据模式进行匹配
+					if force_replace {
+						// 强制模式
+						shouldReplace = true
+						matchReason = "Force Replace Mode"
+					} else if enableRegex {
+						// 正则模式
+						if uaRegexp != nil && uaRegexp.MatchString(uaStr) {
+							shouldReplace = true
+							matchReason = "Hit User-Agent Pattern"
+						} else {
+							shouldReplace = false
+							matchReason = "Not Hit User-Agent Pattern"
 						}
-					}
-
-					isMatchUaPattern := true // 默认为 true
-					if uaRegexp != nil {
-						isMatchUaPattern = uaRegexp.MatchString(uaStr)
-					}
-
-					if isMatchUaPattern && uaFound {
-						statsRegexHits.Add(1)
-					}
-
-					shouldReplace = !isInWhiteList && isMatchUaPattern
-
-					if !shouldReplace {
-						// 记录不替换的原因并加入缓存
-						if isInWhiteList {
-							logrus.Debugf("[%s] Hit User-Agent Whitelist: %s. ", destAddrPort, uaStr)
-						} else { // 意味着 !isMatchUaPattern
-							logrus.Debugf("[%s] Not Hit User-Agent Pattern: %s. ", destAddrPort, uaStr)
-						}
-						uaCache.Add(uaStr, uaStr) //缓存不修改的UA
 					} else {
-						logrus.Debugf("[%s] Hit User-Agent: %s", destAddrPort, uaStr)
+						// 默认：关键词模式
+						shouldReplace = false
+						matchReason = "Not Hit User-Agent Keywords"
+						for _, keyword := range keywordsList {
+							if strings.Contains(uaStr, keyword) {
+								shouldReplace = true
+								matchReason = "Hit User-Agent Keyword"
+								break
+							}
+						}
 					}
+				}
+
+				// 3. 处理日志和缓存
+				if !shouldReplace {
+					logrus.Debugf("[%s] %s: %s. ", destAddrPort, matchReason, uaStr)
+					uaCache.Add(uaStr, uaStr) // 缓存不修改的UA
+				} else {
+					logrus.Debugf("[%s] %s: %s", destAddrPort, matchReason, uaStr)
 				}
 
 				// 根据 shouldReplace 标志执行操作
