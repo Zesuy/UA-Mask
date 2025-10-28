@@ -59,8 +59,7 @@ var (
 	//io.Copy 使用的缓冲区
 	bufferPool = sync.Pool{
 		New: func() any {
-			buf := make([]byte, 32*1024)
-			return &buf
+			return make([]byte, 32*1024)
 		},
 	}
 )
