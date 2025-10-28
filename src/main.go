@@ -48,8 +48,8 @@ var (
 	statsHttpRequests      atomic.Uint64 // 已处理 HTTP 请求总数
 	statsRegexHits         atomic.Uint64 // 正则命中总数
 	statsModifiedRequests  atomic.Uint64 // 成功篡改总数
-	statsCacheHits         atomic.Uint64 // 缓存命中总数
-	statsCacheRatios       atomic.Uint64 // 缓存命中率
+	statsCacheHits         atomic.Uint64 // 缓存命中(修改)
+	statsCacheHitNoModify  atomic.Uint64 // 缓存命中(放行)
 
 	// bufio.Reader 池
 	bufioReaderPool = sync.Pool{
@@ -70,37 +70,70 @@ func startStatsWriter(filePath string, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	var lastHttpRequests uint64
+	lastCheckTime := time.Now()
+
 	for range ticker.C {
-		// 原子地读取所有计数器
-		httpRequests := statsHttpRequests.Load()
-		regexHits := statsRegexHits.Load()
-		modified := statsModifiedRequests.Load()
 		activeConn := statsActiveConnections.Load()
-		cacheHits := statsCacheHits.Load()
+		httpRequests := statsHttpRequests.Load()
+		modified := statsModifiedRequests.Load()
+		cacheHitModify := statsCacheHits.Load()
+		cacheHitPass := statsCacheHitNoModify.Load()
 
-		var cacheRatio uint64
-		var total = regexHits + cacheHits
-		if total > 0 {
-			cacheRatio = (cacheHits * 100) / total
-		} else {
-			cacheRatio = 0
+		// --- 2. 计算派生指标 ---
+
+		// 处理速率 (RPS)
+		now := time.Now()
+		intervalSeconds := now.Sub(lastCheckTime).Seconds()
+		var rps float64
+		if intervalSeconds > 0 {
+			requestsSinceLast := httpRequests - lastHttpRequests
+			rps = float64(requestsSinceLast) / intervalSeconds
 		}
-		statsCacheRatios.Store(cacheRatio)
+		// 更新下次计算所需的状态
+		lastHttpRequests = httpRequests
+		lastCheckTime = now
 
-		// 格式化为简单的 key:value 格式
+		// 总缓存命中 = 缓存命中(修改) + 缓存命中(放行)
+		totalCacheHits := cacheHitModify + cacheHitPass
+
+		// 规则处理 = 请求总数 - 总缓存命中
+		var ruleProcessing uint64
+		if httpRequests > totalCacheHits {
+			ruleProcessing = httpRequests - totalCacheHits
+		}
+
+		// 直接放行 = 请求总数 - 成功修改
+		var directPass uint64
+		if httpRequests > modified {
+			directPass = httpRequests - modified
+		}
+
+		// 总缓存率 = 总缓存命中 / 请求总数 * 100%
+		var totalCacheRatio float64
+		if httpRequests > 0 {
+			totalCacheRatio = (float64(totalCacheHits) * 100) / float64(httpRequests)
+		}
+
 		content := fmt.Sprintf(
-			"active_connections:%d\n"+
-				"http_requests:%d\n"+
-				"regex_hits:%d\n"+
-				"modifications_done:%d\n"+
-				"cache_hits:%d\n"+
-				"cache_ratio:%d\n",
+			"current_connections:%d\n"+
+				"total_requests:%d\n"+
+				"rps:%.2f\n"+
+				"successful_modifications:%d\n"+
+				"direct_passthrough:%d\n"+
+				"rule_processing:%d\n"+
+				"cache_hit_modify:%d\n"+
+				"cache_hit_pass:%d\n"+
+				"total_cache_ratio:%.2f\n",
 			activeConn,
 			httpRequests,
-			regexHits,
+			rps,
 			modified,
-			cacheHits,
-			cacheRatio,
+			directPass,
+			ruleProcessing,
+			cacheHitModify,
+			cacheHitPass,
+			totalCacheRatio,
 		)
 
 		err := os.WriteFile(filePath, []byte(content), 0644)
@@ -434,6 +467,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 					statsModifiedRequests.Add(1)
 					logrus.Debugf("[%s] UA modified (cached): %s -> %s", destAddrPort, uaStr, finalUA)
 				} else {
+					statsCacheHitNoModify.Add(1)
 					logrus.Debugf("[%s] UA not modified (cached): %s", destAddrPort, uaStr)
 				}
 			} else {

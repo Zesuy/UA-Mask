@@ -66,17 +66,28 @@ stats_display.cfgvalue = function(self, section)
     
     local stats = get_stats()
     
-    local active = stats["active_connections"] or "0"
-    local http = stats["http_requests"] or "0"
-    local regex = stats["regex_hits"] or "0"
-    local modified = stats["modifications_done"] or "0"
-    local cache_hits = stats["cache_hits"] or "0"
-    local cache_ratio = stats["cache_ratio"] or "0"
+    -- 第一行：负载与性能
+    local connections = stats["current_connections"] or "0"
+    local total_reqs  = stats["total_requests"] or "0"
+    local rps         = stats["rps"] or "0.00"
+
+    -- 第二行：流量分类
+    local modified    = stats["successful_modifications"] or "0"
+    local passthrough = stats["direct_passthrough"] or "0"
+    local rule_proc   = stats["rule_processing"] or "0"
+    
+    -- 第三行：缓存效率
+    local cache_mod   = stats["cache_hit_modify"] or "0"
+    local cache_pass  = stats["cache_hit_pass"] or "0"
+    local cache_ratio = stats["total_cache_ratio"] or "0.00"
 
     return string.format(
-        "<b>当前连接:</b> %s | <b>HTTP请求:</b> %s | <b>正则匹配:</b> %s<br>" ..
-        "<b>缓存命中:</b> %s | <b>成功修改:</b> %s | <b>缓存率:</b> %s%%",
-        active, http, regex, cache_hits,modified, cache_ratio
+        "<b>当前连接:</b> %s | <b>请求总数:</b> %s | <b>处理速率:</b> %s RPS<br>" ..
+        "<b>成功修改:</b> %s | <b>直接放行:</b> %s | <b>规则处理:</b> %s<br>" ..
+        "<b>缓存(修改):</b> %s | <b>缓存(放行):</b> %s | <b>总缓存率:</b> %s%%",
+        connections, total_reqs, rps,
+        modified, passthrough, rule_proc,
+        cache_mod, cache_pass, cache_ratio
     )
 end
 
