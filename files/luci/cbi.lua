@@ -119,6 +119,10 @@ uaRegexPattern.placeholder = "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple
 uaRegexPattern.description = "当不使用强制替换时，用于匹配 User-Agent 的正则表达式"
 
 
+whitelist = main:taboption("general", Value, "whitelist", "User-Agent 白名单")
+whitelist.placeholder = "MicroMessenger Client,ByteDancePcdn"
+whitelist.description = "指定不进行 User-Agent 替换的关键字列表，用逗号分隔 (如: 'MicroMessenger Client,ByteDancePcdn')。"
+
 -- === Tab 2: 网络与防火墙 (网络、日志等级、防火墙相关) ===
 
 

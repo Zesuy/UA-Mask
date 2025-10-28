@@ -38,6 +38,7 @@ var (
 	uaRegexp             *regexp.Regexp
 	logFile              string
 	HTTP_METHOD          = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
+	whitelistArg         string
 	whitelist            = []string{
 		"MicroMessenger Client",
 		"ByteDancePcdn",
@@ -104,7 +105,23 @@ func main() {
 	flag.BoolVar(&enablePartialReplace, "s", false, "Enable Regex Partial Replace")
 	flag.StringVar(&logFile, "log", "", "Log file path (e.g., /tmp/ua3f-tproxy.log). Default is stdout.")
 	flag.StringVar(&uaPattern, "r", "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)", "UA-Pattern (Regex)")
+	flag.StringVar(&whitelistArg, "w", "", "Comma-separated User-Agent whitelist")
 	flag.Parse()
+
+	if whitelistArg != "" {
+		parts := strings.Split(whitelistArg, ",")
+		trimmed := make([]string, 0, len(parts))
+		for _, s := range parts {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				trimmed = append(trimmed, s)
+			}
+		}
+		if len(trimmed) > 0 {
+			whitelist = trimmed
+		}
+	}
+
 	// 编译 UA 正则表达式
 	uaPattern = "(?i)" + uaPattern
 	var err error
@@ -154,6 +171,7 @@ func main() {
 	logrus.Infof("User-Agent Regex Pattern: %s", uaPattern)
 	logrus.Infof("Enable Partial Replace: %v", enablePartialReplace)
 	logrus.Infof("Log level: %s", logLevel)
+	logrus.Infof("User-Agent Whitelist: %v", whitelist)
 
 	// 监听端口
 	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(0, 0, 0, 0), Port: port})
