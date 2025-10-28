@@ -101,18 +101,6 @@ port.placeholder = "12032"
 port.default = "12032"
 port.datatype = "port"
 
-log_level = main:taboption("general", ListValue, "log_level", "日志等级")
-log_level.default = "info"
-log_level:value("debug", "调试(debug)")
-log_level:value("info", "信息(info)")
-log_level:value("warn", "警告(warn)")
-log_level:value("error", "错误(error)")
-log_level:value("fatal", "致命(fatal)")
-log_level:value("panic", "崩溃(panic)")
-
-log_file = main:taboption("general", Value, "log_file", "应用日志路径")
-log_file.placeholder = "/tmp/ua3f-tproxy/ua3f-tproxy.log"
-log_file.description = "指定 Go 程序运行时日志的输出文件路径。留空将禁用文件日志。"
 
 -- 新增：运行模式
 operating_profile = main:taboption("general", ListValue, "operating_profile", "运行模式",
@@ -190,6 +178,21 @@ bypass_ips.default = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
 bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 
 
+
+
+
+log_level = main:taboption("softlog", ListValue, "log_level", "日志等级")
+log_level.default = "info"
+log_level:value("debug", "调试(debug)")
+log_level:value("info", "信息(info)")
+log_level:value("warn", "警告(warn)")
+log_level:value("error", "错误(error)")
+log_level:value("fatal", "致命(fatal)")
+log_level:value("panic", "崩溃(panic)")
+
+log_file = main:taboption("softlog", Value, "log_file", "应用日志路径")
+log_file.placeholder = "/tmp/ua3f-tproxy/ua3f-tproxy.log"
+log_file.description = "指定 Go 程序运行时日志的输出文件路径。留空将禁用文件日志。"
 
 softlog = main:taboption("softlog", TextValue, "")
 softlog.readonly = true
