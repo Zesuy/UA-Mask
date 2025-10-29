@@ -39,9 +39,7 @@ var (
 	HTTP_METHOD          = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "CONNECT", "PATCH"}
 	whitelistArg         string
 	whitelist            = []string{
-		"MicroMessenger Client",
-		"ByteDancePcdn",
-		"Go-http-client/1.1",
+		// 默认空白名单
 	}
 	statsActiveConnections atomic.Uint64 // 当前活跃连接数
 	statsHttpRequests      atomic.Uint64 // 已处理 HTTP 请求总数

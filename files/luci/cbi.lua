@@ -35,10 +35,12 @@ end
 UAmask = Map("UAmask",
     "UA-MASK",
     [[
-        <style>
-            .cbi-value-field > br { display: none !important; }
-        </style>
-        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本: 0.3.0</a>
+    <style>
+    .cbi-value-field > br:has(+ .cbi-value-description) {
+        display: none !important;
+    }
+    </style>
+        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本: 0.3.1</a>
         <br>
         用于修改 User-Agent 的透明代理,使用 TPROXY 技术实现。
         <br>
