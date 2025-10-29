@@ -18,7 +18,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/hashicorp/golang-lru/v2/expirable"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -32,7 +32,7 @@ var (
 	showVer              bool
 	force_replace        bool
 	enablePartialReplace bool
-	uaCache              *expirable.LRU[string, string]
+	uaCache              *lru.Cache[string, string]
 	uaPattern            string
 	uaRegexp             *regexp.Regexp
 	logFile              string
@@ -236,7 +236,10 @@ func main() {
 	}
 
 	//key: originUa, value: finalUa
-	uaCache = expirable.NewLRU[string, string](cacheSize, nil, time.Second*600)
+	uaCache, err = lru.New[string, string](cacheSize)
+	if err != nil {
+		logrus.Fatalf("Failed to create LRU cache: %v", err)
+	}
 
 	// 打印配置信息
 	logrus.Infof("UA3F-TPROXY v%s", version)

@@ -147,7 +147,7 @@ replace_method.default = "full"
 replace_method.description = "<b>完整替换:</b> 将整个 UA 替换为新值。<br><b>部分替换:</b> 仅将 UA 中被正则匹配到的部分替换为新值。"
 
 whitelist = main:taboption("general", Value, "whitelist", "User-Agent 白名单")
-whitelist.placeholder = "MicroMessenger Client,ByteDancePcdn"
+whitelist.placeholder = ""
 whitelist.description = "指定不进行替换的 User-Agent，用逗号分隔 (如: 'MicroMessenger Client,ByteDancePcdn')。"
 
 -- === Tab 2: 网络与防火墙 (网络、日志等级、防火墙相关) ===
