@@ -130,7 +130,7 @@ match_mode.default = "keywords"
 -- 仅在 keywords 模式下显示
 keywords = main:taboption("general", Value, "keywords", "关键词列表")
 keywords:depends("match_mode", "keywords")
-keywords.default = "Winodws,Linux,Android,iPhone,Macintosh,iPad,OpenHarmony"
+keywords.default = "Windows,Linux,Android,iPhone,Macintosh,iPad,OpenHarmony"
 keywords.description = "当 UA 包含列表中的任意关键词时，替换整个ua为目标值。用逗号分隔。"
 
 -- 仅在 regex 模式下显示
