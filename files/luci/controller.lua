@@ -1,5 +1,5 @@
-module("luci.controller.ua3f-tproxy", package.seeall)
+module("luci.controller.UAmask", package.seeall)
 
 function index()
-    entry({"admin", "services", "ua3f-tproxy"}, cbi("ua3f-tproxy"), "UA3F TPROXY", 1)
+    entry({"admin", "services", "UAmask"}, cbi("UAmask"), "UA MASK", 1)
 end

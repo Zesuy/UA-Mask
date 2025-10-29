@@ -3,7 +3,7 @@ local nixio = require("nixio")
 local luci_sys = require("luci.sys")
 
 local stats_cache = nil
-local stats_file = "/tmp/ua3f-tproxy.stats"
+local stats_file = "/tmp/UAmask.stats"
 
 local function get_stats()
     if stats_cache then
@@ -32,27 +32,27 @@ local function get_stat_value(key)
     return stats[key] or "0"
 end
 
-ua3f_tproxy = Map("ua3f-tproxy",
-    "UA3F-TPROXY",
+UAmask = Map("UAmask",
+    "UA-MASK",
     [[
         <style>
             .cbi-value-field > br { display: none !important; }
         </style>
-        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.3.0</a>
+        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本: 0.3.0</a>
         <br>
         用于修改 User-Agent 的透明代理,使用 TPROXY 技术实现。
         <br>
     ]]
 )
 
-enable = ua3f_tproxy:section(NamedSection, "enabled", "ua3f-tproxy", "状态")
-main = ua3f_tproxy:section(NamedSection, "main", "ua3f-tproxy", "设置")
+enable = UAmask:section(NamedSection, "enabled", "UAmask", "状态")
+main = UAmask:section(NamedSection, "main", "UAmask", "设置")
 
 enable:option(Flag, "enabled", "启用")
 status = enable:option(DummyValue, "status", "运行状态")
 status.rawhtml = true
 status.cfgvalue = function(self, section)
-    local pid = luci_sys.exec("pidof ua3f-tproxy")
+    local pid = luci_sys.exec("pidof UAmask")
     if pid == "" then
     return "<span style='color:red'>" .. "未运行" .. "</span>"
     else
@@ -62,7 +62,7 @@ end
 stats_display = enable:option(DummyValue, "stats_display", "运行统计")
 stats_display.rawhtml = true
 stats_display.cfgvalue = function(self, section)
-    local pid = luci_sys.exec("pidof ua3f-tproxy")
+    local pid = luci_sys.exec("pidof UAmask")
     if pid == "" then
         return "<em>(服务未运行时不统计)</em>"
     end
@@ -187,7 +187,7 @@ log_level:value("fatal", "致命(fatal)")
 log_level:value("panic", "崩溃(panic)")
 
 log_file = main:taboption("softlog", Value, "log_file", "应用日志路径")
-log_file.placeholder = "/tmp/ua3f-tproxy/ua3f-tproxy.log"
+log_file.placeholder = "/tmp/UAmask/UAmask.log"
 log_file.description = "指定 Go 程序运行时日志的输出文件路径。留空将禁用文件日志。"
 
 softlog = main:taboption("softlog", TextValue, "")
@@ -214,20 +214,20 @@ end
 
 local apply = luci.http.formvalue("cbi.apply")
 if apply then
-    local enabled_form_value = luci.http.formvalue("cbid.ua3f-tproxy.enabled.enabled")
+    local enabled_form_value = luci.http.formvalue("cbid.UAmask.enabled.enabled")
     
-    local pid = luci_sys.exec("pidof ua3f-tproxy")
+    local pid = luci_sys.exec("pidof UAmask")
     local is_running = (pid ~= "" and pid ~= nil)
 
     if enabled_form_value == "1" then
         if is_running then
-            luci.sys.call("/etc/init.d/ua3f-tproxy reload >/dev/null 2>&1")
+            luci.sys.call("/etc/init.d/UAmask reload >/dev/null 2>&1")
         else
-            luci.sys.call("/etc/init.d/ua3f-tproxy start >/dev/null 2>&1")
+            luci.sys.call("/etc/init.d/UAmask start >/dev/null 2>&1")
         end
     else
-        luci.sys.call("/etc/init.d/ua3f-tproxy stop >/dev/null 2>&1")
+        luci.sys.call("/etc/init.d/UAmask stop >/dev/null 2>&1")
     end
 end
 
-return ua3f_tproxy
+return UAmask

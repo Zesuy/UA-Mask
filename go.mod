@@ -1,4 +1,4 @@
-module ua3f-tproxy
+module UAmask
 
 go 1.21
 

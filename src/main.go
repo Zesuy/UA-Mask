@@ -152,7 +152,7 @@ func main() {
 	flag.IntVar(&port, "port", 8080, "TPROXY listen port")
 	flag.StringVar(&logLevel, "loglevel", "info", "Log level (debug, info, warn, error)")
 	flag.BoolVar(&showVer, "v", false, "Show version")
-	flag.StringVar(&logFile, "log", "", "Log file path (e.g., /tmp/ua3f-tproxy.log). Default is stdout.")
+	flag.StringVar(&logFile, "log", "", "Log file path (e.g., /tmp/UAmask.log). Default is stdout.")
 	flag.StringVar(&whitelistArg, "w", "", "Comma-separated User-Agent whitelist")
 
 	// 匹配模式相关
@@ -242,7 +242,7 @@ func main() {
 	}
 
 	// 打印配置信息
-	logrus.Infof("UA3F-TPROXY v%s", version)
+	logrus.Infof("UA-MASK v%s", version)
 	logrus.Infof("Port: %d", port)
 	logrus.Infof("User-Agent: %s", userAgent)
 	logrus.Infof("Log level: %s", logLevel)
@@ -270,7 +270,7 @@ func main() {
 
 	logrus.Infof("REDIRECT proxy server listening on 0.0.0.0:%d", port)
 
-	go startStatsWriter("/tmp/ua3f-tproxy.stats", 5*time.Second)
+	go startStatsWriter("/tmp/UAmask.stats", 5*time.Second)
 
 	for {
 		conn, err := listener.AcceptTCP()
