@@ -59,7 +59,13 @@ var (
 			return bufio.NewReaderSize(nil, 16*1024)
 		},
 	}
-
+	// bufio.Writer 池
+	bufioWriterPool = sync.Pool{
+		New: func() any {
+			// 默认大小，将在 main 中根据 bufferSize 重新初始化
+			return bufio.NewWriterSize(nil, 16*1024)
+		},
+	}
 	//io.Copy 使用的缓冲区
 	bufferPool = sync.Pool{
 		New: func() any {
@@ -230,6 +236,12 @@ func main() {
 	bufioReaderPool = sync.Pool{
 		New: func() any {
 			return bufio.NewReaderSize(nil, bufferSize)
+		},
+	}
+	// 初始化 Writer 池
+	bufioWriterPool = sync.Pool{
+		New: func() any {
+			return bufio.NewWriterSize(nil, bufferSize)
 		},
 	}
 
@@ -416,6 +428,12 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 	srcReader.Reset(src)
 	defer bufioReaderPool.Put(srcReader)
 
+	dstWriter := bufioWriterPool.Get().(*bufio.Writer)
+	dstWriter.Reset(dst)
+	defer func() {
+		dstWriter.Flush()
+		bufioWriterPool.Put(dstWriter)
+	}()
 	logrus.Debugf("[%s] HTTP detected, processing with go prase", destAddrPort)
 
 	for {
@@ -426,6 +444,10 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			} else {
 				logrus.Debugf("[%s] isHTTP check in loop error: %v", destAddrPort, err)
 			}
+
+			if err_flush := dstWriter.Flush(); err_flush != nil {
+				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
+			}
 			buf := bufferPool.Get().([]byte)
 			io.CopyBuffer(dst, srcReader, buf)
 			bufferPool.Put(buf)
@@ -434,6 +456,10 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 
 		if !is_http {
 			logrus.Debugf("[%s] Protocol switch detected. Changing to direct relay mode.", destAddrPort)
+
+			if err_flush := dstWriter.Flush(); err_flush != nil {
+				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
+			}
 			buf := bufferPool.Get().([]byte)
 			io.CopyBuffer(dst, srcReader, buf)
 			bufferPool.Put(buf)
@@ -556,8 +582,13 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			}
 		} // 循环，回到第 3 步，等待下一个 http.ReadRequest
 		// 6. 将头部写回目标
-		if err = request.Write(dst); err != nil {
-			logrus.Errorf("[%s] Write modified headers error: %v", destAddrPort, err)
+		if err := request.Write(dstWriter); err != nil {
+			logrus.Debugf("[%s] HTTP write request error: %v", destAddrPort, err)
+			request.Body.Close()
+			return
+		}
+		if err := dstWriter.Flush(); err != nil {
+			logrus.Debugf("[%s] Flush error after writing request: %v", destAddrPort, err)
 			request.Body.Close()
 			return
 		}
