@@ -1,9 +1,9 @@
 include $(TOPDIR)/rules.mk
 
 # 1. 修改包名和版本
-PKG_NAME:=ua3f-tproxy
-PKG_VERSION:=0.3.0
-PKG_RELEASE:=1
+PKG_NAME:=UAmask
+PKG_VERSION:=0.3.1
+PKG_RELEASE:=2
 
 PKG_MAINTAINER:=Zesuy <hongri580@gmail.com>
 PKG_LICENSE:=GPL-3.0-only
@@ -14,23 +14,24 @@ PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=no-mips16
 
 # 2. 修改 Go 包路径和版本变量
-GO_PKG:=ua3f-tproxy
+GO_PKG:=UAmask
 GO_PKG_LDFLAGS_X:= main.version=$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 # 3. nftables 包定义
-define Package/ua3f-tproxy
+define Package/UAmask
 	SECTION:=net
 	CATEGORY:=Network
 	SUBMENU:=Web Servers/Proxies
 	TITLE:=A transparent proxy for changing User-Agent (nftables)
-	URL:=https://github.com/Zesuy/UA3F-tproxy
+	URL:=https://github.com/Zesuy/UA-Mask
 	DEPENDS:=$(GO_ARCH_DEPENDS) +luci-compat +firewall4 +kmod-nft-tproxy
+	CONFLICTS:=ua3f-tproxy ua3f-tproxy-ipt
 endef
 
-define Package/ua3f-tproxy/description
+define Package/UAmask/description
 	A transparent proxy (TPROXY) for modifying HTTP User-Agent.
 	This is the default version using nftables (firewall4).
 endef
@@ -43,65 +44,65 @@ define Build/Prepare
 endef
 
 # 4. nftables 包 conffiles
-define Package/ua3f-tproxy/conffiles
-/etc/config/ua3f-tproxy
+define Package/UAmask/conffiles
+/etc/config/UAmask
 endef
 
 # 5.nftables 包 install 步骤
-define Package/ua3f-tproxy/install
+define Package/UAmask/install
 	$(call GoPackage/Package/Install/Bin,$(PKG_INSTALL_DIR))
 
 	$(INSTALL_DIR) $(1)/usr/bin/
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/ua3f-tproxy $(1)/usr/bin/ua3f-tproxy
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/UAmask $(1)/usr/bin/UAmask
 	$(INSTALL_DIR) $(1)/etc/init.d/
-	$(INSTALL_BIN) ./files/ua3f-tproxy.init $(1)/etc/init.d/ua3f-tproxy
+	$(INSTALL_BIN) ./files/UAmask.init $(1)/etc/init.d/UAmask
 	$(INSTALL_DIR) $(1)/etc/config/
-	$(INSTALL_CONF) ./files/ua3f-tproxy.uci $(1)/etc/config/ua3f-tproxy
+	$(INSTALL_CONF) ./files/UAmask.uci $(1)/etc/config/UAmask
 	
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi/
-	$(INSTALL_CONF) ./files/luci/cbi.lua $(1)/usr/lib/lua/luci/model/cbi/ua3f-tproxy.lua
+	$(INSTALL_CONF) ./files/luci/cbi.lua $(1)/usr/lib/lua/luci/model/cbi/UAmask.lua
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller/
-	$(INSTALL_CONF) ./files/luci/controller.lua $(1)/usr/lib/lua/luci/controller/ua3f-tproxy.lua
+	$(INSTALL_CONF) ./files/luci/controller.lua $(1)/usr/lib/lua/luci/controller/UAmask.lua
 	
 endef
 
 # 7. IPTABLES 包定义
-define Package/ua3f-tproxy-ipt
+define Package/UAmask-ipt
 	SECTION:=net
 	CATEGORY:=Network
 	SUBMENU:=Web Servers/Proxies
 	TITLE:=A transparent proxy for changing User-Agent (iptables)
-	URL:=https://github.com/Zesuy/UA3F-tproxy
+	URL:=https://github.com/Zesuy/UA-Mask
 	DEPENDS:=$(GO_ARCH_DEPENDS) +luci-compat +firewall +kmod-ipt-tproxy
-	CONFLICTS:=ua3f-tproxy firewall4
+	CONFLICTS:=UAmask firewall4 ua3f-tproxy ua3f-tproxy-ipt
 endef
 
-define Package/ua3f-tproxy-ipt/description
+define Package/UAmask-ipt/description
 	A transparent proxy (TPROXY) for modifying HTTP User-Agent.
 	This is the legacy version using iptables (firewall3).
 endef
 
 # 8. 新增：IPTABLES 包 conffiles
-define Package/ua3f-tproxy-ipt/conffiles
-/etc/config/ua3f-tproxy
+define Package/UAmask-ipt/conffiles
+/etc/config/UAmask
 endef
 
 # 9. 新增：IPTABLES 包 install 步骤
-define Package/ua3f-tproxy-ipt/install
+define Package/UAmask-ipt/install
 	$(INSTALL_DIR) $(1)/usr/bin/
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/ua3f-tproxy $(1)/usr/bin/ua3f-tproxy
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/UAmask $(1)/usr/bin/UAmask
 	$(INSTALL_DIR) $(1)/etc/init.d/
-	$(INSTALL_BIN) ./files/ua3f-tproxy_ipt.init $(1)/etc/init.d/ua3f-tproxy
+	$(INSTALL_BIN) ./files/UAmask_ipt.init $(1)/etc/init.d/UAmask
 	$(INSTALL_DIR) $(1)/etc/config/
-	$(INSTALL_CONF) ./files/ua3f-tproxy.uci $(1)/etc/config/ua3f-tproxy
+	$(INSTALL_CONF) ./files/UAmask.uci $(1)/etc/config/UAmask
 	
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi/
-	$(INSTALL_CONF) ./files/luci/cbi.lua $(1)/usr/lib/lua/luci/model/cbi/ua3f-tproxy.lua
+	$(INSTALL_CONF) ./files/luci/cbi.lua $(1)/usr/lib/lua/luci/model/cbi/UAmask.lua
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller/
-	$(INSTALL_CONF) ./files/luci/controller.lua $(1)/usr/lib/lua/luci/controller/ua3f-tproxy.lua
+	$(INSTALL_CONF) ./files/luci/controller.lua $(1)/usr/lib/lua/luci/controller/UAmask.lua
 endef
 
 
-$(eval $(call GoBinPackage,ua3f-tproxy))
-$(eval $(call BuildPackage,ua3f-tproxy))
-$(eval $(call BuildPackage,ua3f-tproxy-ipt))
+$(eval $(call GoBinPackage,UAmask))
+$(eval $(call BuildPackage,UAmask))
+$(eval $(call BuildPackage,UAmask-ipt))

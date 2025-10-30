@@ -3,7 +3,7 @@ local nixio = require("nixio")
 local luci_sys = require("luci.sys")
 
 local stats_cache = nil
-local stats_file = "/tmp/ua3f-tproxy.stats"
+local stats_file = "/tmp/UAmask.stats"
 
 local function get_stats()
     if stats_cache then
@@ -32,24 +32,29 @@ local function get_stat_value(key)
     return stats[key] or "0"
 end
 
-ua3f_tproxy = Map("ua3f-tproxy",
-    "UA3F-TPROXY",
+UAmask = Map("UAmask",
+    "UA-MASK",
     [[
-        <a href="https://github.com/Zesuy/UA3F-tproxy" target="_blank">版本: 0.3.0</a>
+    <style>
+    .cbi-value-field > br:has(+ .cbi-value-description) {
+        display: none !important;
+    }
+    </style>
+        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本: 0.3.1</a>
         <br>
         用于修改 User-Agent 的透明代理,使用 TPROXY 技术实现。
         <br>
     ]]
 )
 
-enable = ua3f_tproxy:section(NamedSection, "enabled", "ua3f-tproxy", "状态")
-main = ua3f_tproxy:section(NamedSection, "main", "ua3f-tproxy", "设置")
+enable = UAmask:section(NamedSection, "enabled", "UAmask", "状态")
+main = UAmask:section(NamedSection, "main", "UAmask", "设置")
 
 enable:option(Flag, "enabled", "启用")
 status = enable:option(DummyValue, "status", "运行状态")
 status.rawhtml = true
 status.cfgvalue = function(self, section)
-    local pid = luci_sys.exec("pidof ua3f-tproxy")
+    local pid = luci_sys.exec("pidof UAmask")
     if pid == "" then
     return "<span style='color:red'>" .. "未运行" .. "</span>"
     else
@@ -59,7 +64,7 @@ end
 stats_display = enable:option(DummyValue, "stats_display", "运行统计")
 stats_display.rawhtml = true
 stats_display.cfgvalue = function(self, section)
-    local pid = luci_sys.exec("pidof ua3f-tproxy")
+    local pid = luci_sys.exec("pidof UAmask")
     if pid == "" then
         return "<em>(服务未运行时不统计)</em>"
     end
@@ -97,7 +102,6 @@ main:tab("softlog", "应用日志")
 
 -- === Tab 1: 常规设置 (UA 相关) ===
 port = main:taboption("general", Value, "port", "监听端口")
-port.placeholder = "12032"
 port.default = "12032"
 port.datatype = "port"
 
@@ -113,7 +117,6 @@ operating_profile.default = "high_throughput"
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
 ua.default = "FFF"
-ua.placeholder = "FFF"
 ua.description = "用于替换的 User-Agent 字符串。"
 
 -- 重构：匹配规则
@@ -127,15 +130,13 @@ match_mode.default = "keywords"
 -- 仅在 keywords 模式下显示
 keywords = main:taboption("general", Value, "keywords", "关键词列表")
 keywords:depends("match_mode", "keywords")
-keywords.placeholder = "iPhone,iPad,Android,Macintosh,Windows,Linux"
-keywords.default = "iPhone,iPad,Android,Macintosh,Windows,Linux"
+keywords.default = "Windows,Linux,Android,iPhone,Macintosh,iPad,OpenHarmony"
 keywords.description = "当 UA 包含列表中的任意关键词时，替换整个ua为目标值。用逗号分隔。"
 
 -- 仅在 regex 模式下显示
 ua_regex = main:taboption("general", Value, "ua_regex", "正则表达式")
 ua_regex:depends("match_mode", "regex")
 ua_regex.default = "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
-ua_regex.placeholder = "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
 ua_regex.description = "用于匹配 User-Agent 的正则表达式。"
 
 -- 仅在 regex 模式下显示
@@ -155,12 +156,10 @@ whitelist.description = "指定不进行替换的 User-Agent，用逗号分隔 (
 
 
 iface = main:taboption("network", Value, "iface", "监听接口")
-iface.placeholder = "br-lan"
 iface.default = "br-lan"
 iface.description = "指定监听的lan口"
 
 bypass_gid = main:taboption("network", Value, "bypass_gid", "绕过 GID")
-bypass_gid.placeholder = "65533"
 bypass_gid.default = "65533"
 bypass_gid.datatype = "uinteger"
 bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。"
@@ -173,7 +172,6 @@ bypass_ports.placeholder = "22 443"
 bypass_ports.description = "豁免的目标端口，用空格分隔 (如: '22 443')。"
 
 bypass_ips = main:taboption("network", Value, "bypass_ips", "绕过目标 IP")
-bypass_ips.placeholder = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
 bypass_ips.default = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
 bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 
@@ -191,7 +189,7 @@ log_level:value("fatal", "致命(fatal)")
 log_level:value("panic", "崩溃(panic)")
 
 log_file = main:taboption("softlog", Value, "log_file", "应用日志路径")
-log_file.placeholder = "/tmp/ua3f-tproxy/ua3f-tproxy.log"
+log_file.placeholder = "/tmp/UAmask/UAmask.log"
 log_file.description = "指定 Go 程序运行时日志的输出文件路径。留空将禁用文件日志。"
 
 softlog = main:taboption("softlog", TextValue, "")
@@ -218,20 +216,20 @@ end
 
 local apply = luci.http.formvalue("cbi.apply")
 if apply then
-    local enabled_form_value = luci.http.formvalue("cbid.ua3f-tproxy.enabled.enabled")
+    local enabled_form_value = luci.http.formvalue("cbid.UAmask.enabled.enabled")
     
-    local pid = luci_sys.exec("pidof ua3f-tproxy")
+    local pid = luci_sys.exec("pidof UAmask")
     local is_running = (pid ~= "" and pid ~= nil)
 
     if enabled_form_value == "1" then
         if is_running then
-            luci.sys.call("/etc/init.d/ua3f-tproxy reload >/dev/null 2>&1")
+            luci.sys.call("/etc/init.d/UAmask reload >/dev/null 2>&1")
         else
-            luci.sys.call("/etc/init.d/ua3f-tproxy start >/dev/null 2>&1")
+            luci.sys.call("/etc/init.d/UAmask start >/dev/null 2>&1")
         end
     else
-        luci.sys.call("/etc/init.d/ua3f-tproxy stop >/dev/null 2>&1")
+        luci.sys.call("/etc/init.d/UAmask stop >/dev/null 2>&1")
     end
 end
 
-return ua3f_tproxy
+return UAmask
