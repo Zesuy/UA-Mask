@@ -113,7 +113,26 @@ operating_profile = main:taboption("general", ListValue, "operating_profile", "�
     "<b>节约内存:</b> 针对 MIPS 等低内存、低 CPU 平台优化，降低资源消耗。")
 operating_profile:value("high_throughput", "高吞吐模式 (推荐 ARM/x86/软路由)")
 operating_profile:value("low_memory", "节约内存模式 (推荐 MIPS/低配路由)")
+operating_profile:value("custom", "自定义模式 (高级用户)")
 operating_profile.default = "high_throughput"
+
+buffer_size = main:taboption("general", Value, "buffer_size", "I/O 缓冲区大小 (字节)")
+buffer_size:depends("operating_profile", "custom")
+buffer_size.datatype = "uinteger"
+buffer_size.default = "8192"
+buffer_size.description = "每个连接使用的 I/O 缓冲区大小，单位为字节。较大的缓冲区有助于提升吞吐性能，但会增加内存使用。"
+
+pool_size = main:taboption("general", Value, "pool_size", "工作协程池大小")
+pool_size:depends("operating_profile", "custom")
+pool_size.datatype = "uinteger"
+pool_size.default = "0"
+pool_size.description = "工作协程池的大小。设置为 0 或更小表示为每个连接创建独立协程，适用于高性能设备。<br> 较小的值适合低内存设备，能显著减少gc压力，但可能降低并发处理能力。<br> 推荐的设置值：高峰并发连接数的50%-100%。"
+
+cache_size = main:taboption("general", Value, "cache_size", "LRU 缓存大小")
+cache_size:depends("operating_profile", "custom")
+cache_size.datatype = "uinteger"
+cache_size.default = "1000"
+cache_size.description = "用于存储已处理 User-Agent 的 LRU 缓存大小。较大的缓存可以提高命中率，减少重复处理，但会占用更多内存
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
 ua.default = "FFF"

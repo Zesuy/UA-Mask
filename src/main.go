@@ -52,6 +52,7 @@ var (
 	enableRegex  bool
 	cacheSize    int
 	bufferSize   int
+	poolSize     int
 
 	// bufio.Reader 池
 	bufioReaderPool = sync.Pool{
@@ -169,6 +170,7 @@ func main() {
 	// 性能调优
 	flag.IntVar(&cacheSize, "cache-size", 1000, "LRU cache size")
 	flag.IntVar(&bufferSize, "buffer-size", 8192, "I/O buffer size (bytes)")
+	flag.IntVar(&poolSize, "p", 0, "Worker pool size (0 or less = one goroutine per connection)")
 
 	flag.Parse()
 
@@ -282,14 +284,54 @@ func main() {
 
 	go startStatsWriter("/tmp/UAmask.stats", 5*time.Second)
 
-	for {
-		conn, err := listener.AcceptTCP()
-		if err != nil {
-			logrus.Errorf("Accept error: %v", err)
-			continue
+	if poolSize > 0 {
+		// --- Worker Pool 模式 ---
+		logrus.Infof("Starting in Worker Pool Mode (size: %d)", poolSize)
+		connChan := make(chan *net.TCPConn, poolSize)
+
+		// 启动指定数量的 worker goroutine
+		for i := 0; i < poolSize; i++ {
+			go func(workerID int) {
+				logrus.Debugf("Worker %d starting", workerID)
+				for conn := range connChan {
+					logrus.Debugf("Worker %d processing connection from %s", workerID, conn.RemoteAddr())
+					handleConnection(conn)
+				}
+				logrus.Debugf("Worker %d stopping", workerID)
+			}(i)
 		}
 
-		go handleConnection(conn)
+		// Accept 循环 (生产者)
+		for {
+			conn, err := listener.AcceptTCP()
+			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Temporary() {
+					logrus.Warnf("Temporary accept error: %v; sleeping for 5ms", err)
+					time.Sleep(5 * time.Millisecond)
+					continue
+				}
+				logrus.Errorf("Accept error: %v", err)
+				continue
+			}
+			connChan <- conn
+		}
+
+	} else {
+		// --- 默认模式---
+		logrus.Info("Starting in Default Mode (one goroutine per connection)")
+		for {
+			conn, err := listener.AcceptTCP()
+			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Temporary() {
+					logrus.Warnf("Temporary accept error: %v; sleeping for 5ms", err)
+					time.Sleep(5 * time.Millisecond)
+					continue
+				}
+				logrus.Errorf("Accept error: %v", err)
+				continue
+			}
+			go handleConnection(conn)
+		}
 	}
 }
 

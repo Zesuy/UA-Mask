@@ -172,12 +172,23 @@ start_service() {
         # 为 Go 程序传递性能调优参数
         procd_append_param command -cache-size 200
         procd_append_param command -buffer-size 4096
-    else
+    elif [ "$operating_profile" = "operating_profile" ];
+    then
         # 默认为 high_throughput
         logger -t "$NAME" "Starting in High-Throughput mode."
         # 使用 Go 程序的默认值或更大的值
         procd_append_param command -cache-size 1000
         procd_append_param command -buffer-size 8192
+    else
+        # 自定义模式
+        local cache_size buffer_size pool_size
+        config_get cache_size "main" "cache_size" "1000"
+        config_get buffer_size "main" "buffer_size" "8192"
+        config_get pool_size "main" "pool_size" "0"
+        logger -t "$NAME" "Starting in Custom mode: cache_size=$cache_size, buffer_size=$buffer_size, pool_size=$pool_size."
+        procd_append_param command -cache-size "$cache_size"
+        procd_append_param command -buffer-size "$buffer_size"
+        procd_append_param command -p "$pool_size"
     fi
 
     #  处理“匹配规则”
