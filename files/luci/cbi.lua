@@ -40,7 +40,7 @@ UAmask = Map("UAmask",
         display: none !important;
     }
     </style>
-        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本: 0.3.1</a>
+        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本: 0.4.0</a>
         <br>
         用于修改 User-Agent 的透明代理,使用 TPROXY 技术实现。
         <br>
@@ -101,18 +101,17 @@ main:tab("network", "网络与防火墙")
 main:tab("softlog", "应用日志")
 
 -- === Tab 1: 常规设置 (UA 相关) ===
-port = main:taboption("general", Value, "port", "监听端口")
-port.default = "12032"
-port.datatype = "port"
-
-
--- 新增：运行模式
+-- 运行模式
 operating_profile = main:taboption("general", ListValue, "operating_profile", "运行模式",
     "选择程序的性能配置。<br>" ..
-    "<b>高吞吐:</b> 适用于 ARM/x86 等性能较强的设备，提供更高的吞吐性能。<br>" ..
-    "<b>节约内存:</b> 针对 MIPS 等低内存、低 CPU 平台优化，降低资源消耗。")
-operating_profile:value("high_throughput", "高吞吐模式 (推荐 ARM/x86/软路由)")
-operating_profile:value("low_memory", "节约内存模式 (推荐 MIPS/低配路由)")
+    "<b>高性能:</b> 使用更大的缓存和更多的worker数，用内存换性能<br>"..
+    "<b>省内存:</b> 降低缓存大小和worker数，适合内存受限设备<br>"..
+    "<b>高吞吐(legacy):</b> 适用于 ARM/x86 等性能较强的设备，提供更高的吞吐性能。(兼容保留上版本的预设)<br>" ..
+    "<b>节约内存(legacy):</b> 针对 MIPS 等低内存、低 CPU 平台优化，降低资源消耗。(兼容保留上版本的预设)<br>")
+operating_profile:value("performance", "高性能")
+operating_profile:value("memory_saving", "省内存")
+operating_profile:value("high_throughput", "高吞吐(legacy)")
+operating_profile:value("low_memory", "节约内存 (legacy)")
 operating_profile:value("custom", "自定义模式 (高级用户)")
 operating_profile.default = "high_throughput"
 
@@ -126,13 +125,19 @@ pool_size = main:taboption("general", Value, "pool_size", "工作协程池大小
 pool_size:depends("operating_profile", "custom")
 pool_size.datatype = "uinteger"
 pool_size.default = "0"
-pool_size.description = "工作协程池的大小。设置为 0 或更小表示为每个连接创建独立协程，适用于高性能设备。<br> 较小的值适合低内存设备，能显著减少gc压力，但可能降低并发处理能力。<br> 推荐的设置值：高峰并发连接数的50%-100%。"
+pool_size.description = "工作协程池的大小。设置为 0 或更小表示为每个连接创建独立协程，适用于高性能设备。<br> 较小的值适合低内存设备，能显著减少gc压力，但可能降低并发处理能力,推荐设"
 
 cache_size = main:taboption("general", Value, "cache_size", "LRU 缓存大小")
 cache_size:depends("operating_profile", "custom")
 cache_size.datatype = "uinteger"
 cache_size.default = "1000"
-cache_size.description = "用于存储已处理 User-Agent 的 LRU 缓存大小。较大的缓存可以提高命中率，减少重复处理，但会占用更多内存
+cache_size.description = "用于存储已处理 User-Agent 的 LRU 缓存大小。较大的缓存可以提高命中率，减少重复处理，但会占用更多内存"
+
+gogc_value=main:taboption("general", Value, "gogc_value", "Go 垃圾回收参数 (GOGC)")
+gogc_value:depends("operating_profile", "custom")
+gogc_value.datatype = "uinteger"
+gogc_value.default = "100"
+gogc_value.description = "Go 语言的垃圾回收参数，控制内存使用与垃圾回收频率的平衡。较高的值会减少垃圾回收频率，但会增加内存使用。"
 
 ua = main:taboption("general", Value, "ua", "User-Agent 标识")
 ua.default = "FFF"
@@ -172,19 +177,22 @@ whitelist.description = "指定不进行替换的 User-Agent，用逗号分隔 (
 
 -- === Tab 2: 网络与防火墙 (网络、日志等级、防火墙相关) ===
 
-
+port = main:taboption("general", Value, "port", "监听端口")
+port.default = "12032"
+port.datatype = "port"
 
 iface = main:taboption("network", Value, "iface", "监听接口")
 iface.default = "br-lan"
 iface.description = "指定监听的lan口"
 
+proxy_host = main:taboption("network", Flag, "proxy_host", "代理主机流量")
+proxy_host.description = "启用后将代理主机自身的流量。如果需要尽量避免和其他代理冲突，请禁用此选项。"
+
 bypass_gid = main:taboption("network", Value, "bypass_gid", "绕过 GID")
+bypass_gid.depends("proxy_host", "1")
 bypass_gid.default = "65533"
 bypass_gid.datatype = "uinteger"
 bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。"
-
-proxy_host = main:taboption("network", Flag, "proxy_host", "代理主机流量")
-proxy_host.description = "启用后将代理主机自身的流量。如果需要尽量避免和其他代理冲突，请禁用此选项。"
 
 bypass_ports = main:taboption("network", Value, "bypass_ports", "绕过目标端口")
 bypass_ports.placeholder = "22 443"

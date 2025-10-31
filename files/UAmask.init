@@ -182,32 +182,64 @@ start_service() {
     procd_append_param command -w "$whitelist"
     [ -n "$log_file" ] && procd_append_param command -log "$log_file"
 
-    #  处理“运行模式”
     local operating_profile
-    config_get operating_profile "main" "operating_profile" "low_memory"
-    if [ "$operating_profile" = "low_memory" ];
-    then
-        logger -t "$NAME" "Starting in Low-Memory mode."
-        # 为 Go 程序传递性能调优参数
-        procd_append_param command -cache-size 200
-        procd_append_param command -buffer-size 4096
-    elif [ "$operating_profile" = "operating_profile" ];
-    then
-        # 默认为 high_throughput
-        logger -t "$NAME" "Starting in High-Throughput mode."
-        # 使用 Go 程序的默认值或更大的值
-        procd_append_param command -cache-size 1000
-        procd_append_param command -buffer-size 8192
-    else
-        # 自定义模式
-        local cache_size buffer_size pool_size
-        config_get cache_size "main" "cache_size" "1000"
-        config_get buffer_size "main" "buffer_size" "8192"
-        config_get pool_size "main" "pool_size" "0"
-        logger -t "$NAME" "Starting in Custom mode: cache_size=$cache_size, buffer_size=$buffer_size, pool_size=$pool_size."
-        procd_append_param command -cache-size "$cache_size"
-        procd_append_param command -buffer-size "$buffer_size"
-        procd_append_param command -p "$pool_size"
+    config_get operating_profile "main" "operating_profile" "high_throughput"
+
+    local cache_size buffer_size pool_size gogc_value
+
+    case "$operating_profile" in
+        memory_saving)
+            logger -t "$NAME" "Starting in memory_saving mode."
+            cache_size=250
+            buffer_size=4096
+            pool_size=100
+            gogc_value=80
+            ;;
+        
+        performance)
+            logger -t "$NAME" "Starting in performance mode."
+            cache_size=2000
+            buffer_size=16384
+            pool_size=0
+            gogc_value=150
+            ;;
+
+        high_throughput)
+            logger -t "$NAME" "Starting in High Throughput mode."
+            cache_size=1000
+            buffer_size=8192
+            ;;
+
+        low_memory)
+            logger -t "$NAME" "Starting in Low Memory mode."
+            cache_size=200
+            buffer_size=4096
+            ;;
+
+        custom)
+            logger -t "$NAME" "Starting in Custom mode."
+            config_get cache_size "main" "cache_size" "1000"
+            config_get buffer_size "main" "buffer_size" "8192"
+            config_get pool_size "main" "pool_size" "0"
+            config_get gogc_value "main" "gogc_value" "100"
+            ;;
+
+        *)
+            logger -t "$NAME" "Starting in High Throughput mode."
+            cache_size=1000
+            buffer_size=8192
+            ;;
+    esac
+
+    # 统一应用参数
+    procd_append_param command -cache-size "$cache_size"
+    procd_append_param command -buffer-size "$buffer_size"
+    procd_append_param command -p "$pool_size"
+
+    # 仅当 gogc_value 不是默认值 100 时才设置 GOGC
+    # (如果 GOGC="100"，不设置环境变量，让 Go 程序使用自己的默认值，效果一样且更干净)
+    if [ "$gogc_value" != "100" ]; then
+        procd_set_param env "GOGC=$gogc_value"
     fi
 
     #  处理“匹配规则”
