@@ -126,13 +126,13 @@ pool_size = main:taboption("general", Value, "pool_size", "工作协程池大小
 pool_size:depends("operating_profile", "custom")
 pool_size.datatype = "uinteger"
 pool_size.default = "0"
-pool_size.description = "工作协程池的大小。设为0则每个连接创建协程，使用协程池会限制最大并发，但能减少gc。<br>最大RAM估计: pool_size*(2*buffer_size + 32KB) +cache_ram. <br>若pool_size设为0，则最大RAM估计: 连接数*(2*buffer_size + 32KB) +cache_ram <br> "
+pool_size.description = "工作协程池的大小。设为0则每个连接创建协程，使用协程池会限制最大并发，但能减少gc。<br>最大RAM估计: pool_size*(2*buffer_size) +cache_ram. <br>若pool_size设为0，则最大RAM估计: 连接数*(2*buffer_size) +cache_ram <br> "
 
 cache_size = main:taboption("general", Value, "cache_size", "LRU 缓存大小")
 cache_size:depends("operating_profile", "custom")
 cache_size.datatype = "uinteger"
 cache_size.default = "1000"
-cache_size.description = "LRU 缓存大小。大的缓存命中率高，预估每1000条最多占用约500KB内存。"
+cache_size.description = "LRU 缓存大小。大的缓存命中率高，预估每1000条占用约300KB内存。"
 
 gogc_value=main:taboption("general", Value, "gogc_value", "Go 垃圾回收参数 (GOGC)")
 gogc_value:depends("operating_profile", "custom")
