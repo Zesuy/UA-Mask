@@ -7,30 +7,53 @@ STOP=90 # 确保在防火墙重载前停止
 NAME="UAmask"
 PROG="/usr/bin/$NAME"
 PID_FILE="/var/run/$NAME.pid"
+
+# --- NFT (fw4) 变量 ---
 FW_CONFIG_NAME="UAmask" # 防火墙 UCI 规则的名称
 NFT_PATH="/tmp/UAmask_rules.nft" # .nft 文件的路径 (使用 /tmp/)
 
-# 仅清理规则和 uci，不重载
-unset_firewall_rules() {
+# --- IPT (fw3) 变量 ---
+IPT="iptables"
+CHAIN_PREROUTING="UAmask_prerouting"
+CHAIN_OUTPUT="UAmask_output"
+
+# --- 防火墙检测 ---
+FW_TYPE=""
+
+detect_firewall() {
+    if command -v fw4 >/dev/null 2>&1; then
+        FW_TYPE="nft"
+    else
+        FW_TYPE="ipt"
+    fi
+}
+
+# 脚本加载时执行防火墙检测
+detect_firewall
+
+# NFTABLES (fw4) 函数
+
+# 仅清理规则和 uci，不重载 (NFT helper)
+unset_firewall_rules_nft() {
     rm -f "${NFT_PATH}" # 清理生成的规则文件
     uci -q delete firewall.${FW_CONFIG_NAME}
     uci commit firewall
 }
 
-# 清理防火墙规则并重载
-unset_firewall() {
-    logger -t "$NAME" "Removing firewall rules..."
-    unset_firewall_rules
+# 清理防火墙规则并重载 (NFT)
+unset_firewall_nft() {
+    logger -t "$NAME" "Removing firewall rules (nft)..."
+    unset_firewall_rules_nft
     nft delete chain inet fw4 UAmask_prerouting_before 2>/dev/null || true
     nft delete chain inet fw4 UAmask_output_after 2>/dev/null || true
     fw4 reload >/dev/null 2>&1
-    logger -t "$NAME" "Firewall rules removed."
+    logger -t "$NAME" "Firewall rules removed (nft)."
 }
 
-# 自动管理防火墙规则
-set_firewall() {
+# 自动管理防火墙规则 (NFT)
+set_firewall_nft() {
     # 1. 确保旧规则被彻底清除
-    unset_firewall_rules
+    unset_firewall_rules_nft
 
     # 2. 从 UCI 读取配置
     config_load "$NAME"
@@ -82,7 +105,7 @@ set_firewall() {
     cat > "${NFT_PATH}" << EOF
 chain UAmask_prerouting_before {
     type nat hook prerouting priority dstnat - 1;
-iifname $nft_ifaces \\
+    iifname $nft_ifaces \\
     ip protocol tcp \\
     # 豁免局域网、环回、保留地址等
     $nft_ips_rule
@@ -97,7 +120,7 @@ EOF
         cat >> "${NFT_PATH}" << EOF
 chain UAmask_output_after {
     type nat hook output priority -100;
-ip protocol tcp \\
+    ip protocol tcp \\
     # 豁免局域网、环回、保留地址等
     $nft_ips_rule
     # 豁免端口
@@ -123,9 +146,125 @@ EOF
     nft delete chain inet fw4 UAmask_prerouting_before 2>/dev/null || true
     nft delete chain inet fw4 UAmask_output_after 2>/dev/null || true
     fw4 reload >/dev/null 2>&1
-    logger -t "$NAME" "Firewall rules applied."
-
+    logger -t "$NAME" "Firewall rules applied (nft)."
 }
+
+# IPTABLES (fw3) 函数
+
+# 清理防火墙规则并重载 (IPT)
+unset_firewall_ipt() {
+    logger -t "$NAME" "Removing firewall rules (iptables)..."
+    
+    # 循环尝试删除跳转规则，直到成功或失败
+    while $IPT -t nat -D PREROUTING -j $CHAIN_PREROUTING 2>/dev/null; do :; done
+    while $IPT -t nat -D OUTPUT -j $CHAIN_OUTPUT 2>/dev/null; do :; done
+
+
+    $IPT -t nat -F $CHAIN_PREROUTING 2>/dev/null || true
+    $IPT -t nat -X $CHAIN_PREROUTING 2>/dev/null || true
+    
+    $IPT -t nat -F $CHAIN_OUTPUT 2>/dev/null || true
+    $IPT -t nat -X $CHAIN_OUTPUT 2>/dev/null || true
+    
+
+    /etc/init.d/firewall reload >/dev/null 2>&1
+    logger -t "$NAME" "Firewall rules removed (iptables)."
+}
+
+# 自动管理防火墙规则 (IPT)
+set_firewall_ipt() {
+    # 1. 确保旧规则被彻底清除
+    unset_firewall_ipt
+
+    # 2. 从 UCI 读取配置 (此部分不变)
+    config_load "$NAME"
+    local port
+    local iface_list
+    local bypass_gid
+    local bypass_ports_list
+    local bypass_ips_list
+    local proxy_host
+
+    config_get port "main" "port" "12032"
+    config_get iface_list "main" "iface" "br-lan"
+    config_get bypass_gid "main" "bypass_gid" "65533"
+    config_get bypass_ports_list "main" "bypass_ports" ""
+    config_get bypass_ips_list "main" "bypass_ips" ""
+    config_get_bool proxy_host "main" "proxy_host" ""
+
+    # --- IPTABLES 规则设置 ---
+
+    # 3. 创建自定义链
+    $IPT -t nat -N $CHAIN_PREROUTING
+    $IPT -t nat -N $CHAIN_OUTPUT
+
+    # 4. 填充 PREROUTING 链
+    for iface in $iface_list; do
+        for ip in $bypass_ips_list; do
+            $IPT -t nat -A $CHAIN_PREROUTING -i "$iface" -p tcp -d "$ip" -j RETURN
+        done
+        if [ -n "$bypass_ports_list" ]; then
+            local ipt_ports=$(echo "$bypass_ports_list" | sed 's/ /,/g')
+            $IPT -t nat -A $CHAIN_PREROUTING -i "$iface" -p tcp -m multiport --dports "$ipt_ports" -j RETURN
+        fi
+        # 将剩余的 TCP 流量重定向到代理端口
+        $IPT -t nat -A $CHAIN_PREROUTING -i "$iface" -p tcp -j REDIRECT --to-port "$port"
+    done
+
+    # 5. OUTPUT 链处理本机流量
+    if [ "$proxy_host" = "1" ]; then
+        # 豁免 UAmask 自己的流量 (通过 GID)
+        $IPT -t nat -A $CHAIN_OUTPUT -p tcp -m owner --gid-owner "$bypass_gid" -j RETURN
+        # 同时豁免 OpenClash 的流量 (GID 65534)，防止循环
+        $IPT -t nat -A $CHAIN_OUTPUT -p tcp -m owner --gid-owner "65534" -j RETURN
+        
+        # 豁免指定的目标 IP
+        for ip in $bypass_ips_list; do
+            $IPT -t nat -A $CHAIN_OUTPUT -p tcp -d "$ip" -j RETURN
+        done
+        
+        # 豁免指定的端口
+        if [ -n "$bypass_ports_list" ]; then
+            local ipt_ports=$(echo "$bypass_ports_list" | sed 's/ /,/g')
+            $IPT -t nat -A $CHAIN_OUTPUT -p tcp -m multiport --dports "$ipt_ports" -j RETURN
+        fi
+
+        # 将剩余的 TCP 流量重定向到代理端口
+        $IPT -t nat -A $CHAIN_OUTPUT -p tcp -j REDIRECT --to-port "$port"
+        
+        # 将自定义 OUTPUT 链挂载到内置的 OUTPUT 链
+        $IPT -t nat -I OUTPUT 1 -j $CHAIN_OUTPUT
+        logger -t "$NAME" "proxy_host is enabled. Added iptables rules for OUTPUT chain."
+    else
+        logger -t "$NAME" "proxy_host is disabled. Skipping OUTPUT chain rules."
+    fi
+
+    # 6. 将自定义 PREROUTING 链挂载到内置的 PREROUTING 链
+    $IPT -t nat -I PREROUTING 1 -j $CHAIN_PREROUTING
+    
+    logger -t "$NAME" "Firewall rules (iptables) applied."
+}
+
+
+# 通用封装函数
+
+set_firewall() {
+    if [ "$FW_TYPE" = "nft" ]; then
+        set_firewall_nft
+    else
+        set_firewall_ipt
+    fi
+}
+
+unset_firewall() {
+    if [ "$FW_TYPE" = "nft" ]; then
+        unset_firewall_nft
+    else
+        unset_firewall_ipt
+    fi
+}
+
+# 通用服务函数 (启动、停止、组设置)
 
 # 检查并创建专用组
 setup_group() {
@@ -139,6 +278,7 @@ setup_group() {
 }
 
 start_service() {
+    logger -t "$NAME" "Starting $NAME with firewall $FW_TYPE..."
     config_load "$NAME"
 
     local enabled
