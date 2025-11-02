@@ -169,46 +169,40 @@ start_service() {
     local cache_size buffer_size pool_size gogc_value
 
     case "$operating_profile" in
-        memory_saving)
-            logger -t "$NAME" "Starting in memory_saving mode."
-            cache_size=250
-            buffer_size=4096
-            pool_size=100
-            gogc_value=80
+        Low)
+            logger -t "$NAME" "Starting in LOW mode."
+            cache_size=2000
+            buffer_size=8192
+            pool_size=200
             ;;
         
-        performance)
-            logger -t "$NAME" "Starting in performance mode."
-            cache_size=2000
-            buffer_size=16384
-            pool_size=0
-            gogc_value=150
-            ;;
-
-        high_throughput)
-            logger -t "$NAME" "Starting in High Throughput mode."
-            cache_size=1000
+        Medium)
+            logger -t "$NAME" "Starting in Medium mode."
+            cache_size=3000
             buffer_size=8192
+            pool_size=500
             ;;
 
-        low_memory)
-            logger -t "$NAME" "Starting in Low Memory mode."
-            cache_size=200
-            buffer_size=4096
+        High)
+            logger -t "$NAME" "Starting in High Throughput mode."
+            cache_size=5000
+            buffer_size=8192
+            pool_size=1000
             ;;
 
         custom)
-            logger -t "$NAME" "Starting in Custom mode."
-            config_get cache_size "main" "cache_size" "1000"
+            config_get cache_size "main" "cache_size" "2000"
             config_get buffer_size "main" "buffer_size" "8192"
             config_get pool_size "main" "pool_size" "0"
             config_get gogc_value "main" "gogc_value" "100"
+            logger -t "$NAME" "Starting in Custom mode: cache_size=$cache_size, buffer_size=$buffer_size, pool_size=$pool_size, GOGC=$gogc_value."
             ;;
 
         *)
-            logger -t "$NAME" "Starting in High Throughput mode."
-            cache_size=1000
-            buffer_size=8192
+            logger -t "$NAME" "Starting in LOW mode."
+            cache_size=2000
+            buffer_size=4096
+            pool_size=200
             ;;
     esac
 
