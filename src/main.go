@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	version              = "0.3.0"
+	version              = "0.4.0"
 	userAgent            string
 	port                 int
 	logLevel             string
@@ -65,12 +65,6 @@ var (
 		New: func() any {
 			// 默认大小，将在 main 中根据 bufferSize 重新初始化
 			return bufio.NewWriterSize(nil, 16*1024)
-		},
-	}
-	//io.Copy 使用的缓冲区
-	bufferPool = sync.Pool{
-		New: func() any {
-			return make([]byte, 32*1024)
 		},
 	}
 )
@@ -235,6 +229,7 @@ func main() {
 	logrus.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})
+	// 初始化 Reader 池
 	bufioReaderPool = sync.Pool{
 		New: func() any {
 			return bufio.NewReaderSize(nil, bufferSize)
@@ -377,10 +372,7 @@ func handleConnection(clientConn *net.TCPConn) {
 	// 服务器 -> 客户端 (直接转发)
 	go func() {
 		defer clientConn.CloseWrite()
-		// 使用带缓冲区的 Copy
-		buf := bufferPool.Get().([]byte)
-		io.CopyBuffer(clientConn, serverConn, buf)
-		bufferPool.Put(buf) // 放回池中
+		io.Copy(clientConn, serverConn)
 		done <- struct{}{}
 	}()
 
@@ -490,9 +482,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			if err_flush := dstWriter.Flush(); err_flush != nil {
 				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
 			}
-			buf := bufferPool.Get().([]byte)
-			io.CopyBuffer(dst, srcReader, buf)
-			bufferPool.Put(buf)
+			io.Copy(dst, srcReader)
 			return
 		}
 
@@ -502,9 +492,7 @@ func modifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
 			if err_flush := dstWriter.Flush(); err_flush != nil {
 				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
 			}
-			buf := bufferPool.Get().([]byte)
-			io.CopyBuffer(dst, srcReader, buf)
-			bufferPool.Put(buf)
+			io.Copy(dst, srcReader)
 			return
 		}
 		// 3. 使用 Go 标准库解析 HTTP 头部
