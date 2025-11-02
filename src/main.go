@@ -287,7 +287,6 @@ func main() {
 		// 启动指定数量的 worker goroutine
 		for i := 0; i < poolSize; i++ {
 			go func(workerID int) {
-				logrus.Debugf("Worker %d starting", workerID)
 				for conn := range connChan {
 					logrus.Debugf("Worker %d processing connection from %s", workerID, conn.RemoteAddr())
 					handleConnection(conn)
