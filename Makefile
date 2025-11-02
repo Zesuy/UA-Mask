@@ -58,7 +58,8 @@ define Package/UAmask/install
 	$(INSTALL_BIN) ./files/UAmask.init $(1)/etc/init.d/UAmask
 	$(INSTALL_DIR) $(1)/etc/config/
 	$(INSTALL_CONF) ./files/UAmask.uci $(1)/etc/config/UAmask
-	
+	$(INSTALL_DIR) $(1)/etc/UAmask/ipset/
+	$(CP) ./files/ipset/* $(1)/etc/UAmask/ipset/
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi/
 	$(INSTALL_CONF) ./files/luci/cbi.lua $(1)/usr/lib/lua/luci/model/cbi/UAmask.lua
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller/

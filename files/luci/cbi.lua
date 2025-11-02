@@ -102,7 +102,7 @@ main:tab("softlog", "应用日志")
 
 -- === Tab 1: 常规设置 (UA 相关) ===
 -- 运行模式
-operating_profile = main:taboption("general", ListValue, "operating_profile", "运行模式",
+operating_profile = main:taboption("general", ListValue, "operating_profile", "性能预设",
     "选择内存预设。<br>" ..
     "<b>Low:</b> 适合128MB 路由器，并发200连接<br>"..
     "<b>Medium:</b> 适合256MB-512MB 路由器，允许并发500连接 <br>"..
@@ -186,6 +186,47 @@ iface = main:taboption("network", Value, "iface", "监听接口")
 iface.default = "br-lan"
 iface.description = "指定监听的lan口"
 
+-- 总开关
+enable_domain_bypass = main:taboption("network", Flag, "enable_domain_bypass", "启用域名绕过 (IPSet)")
+enable_domain_bypass.default = 0
+enable_domain_bypass.description = "启用后，将自动解析指定域名列表，并将其 IP 加入 ipset 进行流量绕过。<br><b>依赖: <code>ipset</code> 软件包。</b>"
+
+-- 预设列表
+predefined_bypass_lists = main:taboption("network", MultiValue, "predefined_bypass_lists", "预设绕过列表")
+predefined_bypass_lists:depends("enable_domain_bypass", "1")
+predefined_bypass_lists:value("steam", "Steam下载CDN")
+predefined_bypass_lists:value("custom", "自定义列表")
+predefined_bypass_lists.description = "选择需要绕过的预设域名列表。"
+
+-- 自定义列表
+local custom_list_path = "/etc/UAmask/ipset/custom.list"
+
+custom_bypass_file_editor = main:taboption("network", TextValue, "custom_bypass_file_editor", "自定义绕过域名列表")
+custom_bypass_file_editor:depends("enable_domain_bypass", "1")
+custom_bypass_file_editor.rows = 10
+custom_bypass_file_editor.wrap = "off"
+custom_bypass_file_editor.description = "每行一个域名。<b>此内容将直接保存到 /etc/UAmask/custom.list</b>"
+
+custom_bypass_file_editor.cfgvalue = function(self, section)
+    if nixio.fs.access(custom_list_path) then
+        local f = io.open(custom_list_path, "r")
+        if f then
+            local content = f:read("*a")
+            f:close()
+            return content
+        end
+    end
+    return "# 在此输入自定义域名，例如:\n# .google.com\n# example.com"
+end
+
+custom_bypass_file_editor.write = function(self, section, value)
+    luci.sys.exec("mkdir -p /etc/UAmask") 
+    local f = io.open(custom_list_path, "w")
+    if f then
+        f:write(value or "")
+        f:close()
+    end
+end
 proxy_host = main:taboption("network", Flag, "proxy_host", "代理主机流量")
 proxy_host.description = "启用后将代理主机自身的流量。如果需要尽量避免和其他代理冲突，请禁用此选项。"
 
