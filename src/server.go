@@ -107,7 +107,7 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 	// 客户端 -> 服务器 (调用 handler 修改 UA)
 	go func() {
 		defer serverConn.CloseWrite()
-		s.handler.ModifyAndForward(serverConn, clientConn, destAddrPort, originalDst.IP.String())
+		s.handler.ModifyAndForward(serverConn, clientConn, destAddrPort, originalDst.IP.String(), originalDst.Port)
 		done <- struct{}{}
 	}()
 

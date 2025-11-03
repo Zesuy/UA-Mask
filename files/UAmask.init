@@ -114,7 +114,7 @@ set_firewall_nft() {
 
     if [ "$enable_firewall_set" = "1" ]; then
         logger -t "$NAME" "Ensuring nftables set '${IPSET_NAME}' exists..."
-        nft add set inet fw4 ${IPSET_NAME} "{ type ipv4_addr ;timeout 10m ; }"
+        nft add set inet fw4 ${IPSET_NAME} "{ type ipv4_addr . inet_service ; timeout 10m ;}"
         if [ $? -ne 0 ]; then
              logger -t "$NAME" "Error: Failed to create nftables set '${IPSET_NAME}'. Domain bypass disabled."
              enable_firewall_set="0"
@@ -126,7 +126,7 @@ cat > "${NFT_PATH}" << EOF
 chain UAmask_prerouting_before {
     type nat hook prerouting priority dstnat - 1;
     
-    $( [ "$enable_firewall_set" = "1" ] && echo "iifname $nft_ifaces ip protocol tcp ip daddr @$IPSET_NAME return" )
+    $( [ "$enable_firewall_set" = "1" ] && echo "iifname $nft_ifaces ip protocol tcp ip daddr . tcp dport @$IPSET_NAME return" )
 
     iifname $nft_ifaces ip protocol tcp \\
     $nft_ips_rule
@@ -142,7 +142,7 @@ cat >> "${NFT_PATH}" << EOF
 chain UAmask_output_after {
     type nat hook output priority -100;
 
-    $( [ "$enable_firewall_set" = "1" ] && echo "ip protocol tcp ip daddr @$IPSET_NAME return" )
+    $( [ "$enable_firewall_set" = "1" ] && echo "ip protocol tcp ip daddr . tcp dport @$IPSET_NAME return" )
 
     ip protocol tcp \\
     # 豁免局域网、环回、保留地址等
@@ -225,7 +225,7 @@ set_firewall_ipt() {
             enable_firewall_set="0"
         else
             logger -t "$NAME" "Creating ipset '$IPSET_NAME' for domain bypass..."
-            ipset create "$IPSET_NAME" hash:ip timeout 600 -exist
+            ipset create "$IPSET_NAME" hash:ip,port timeout 600 -exist
         fi
     fi
     # --- IPTABLES 规则设置 ---
@@ -235,7 +235,7 @@ set_firewall_ipt() {
     $IPT -t nat -N $CHAIN_OUTPUT
 
     if [ "$enable_firewall_set" = "1" ]; then
-        $IPT -t nat -A $CHAIN_PREROUTING -m set --match-set "$IPSET_NAME" dst -j RETURN
+        $IPT -t nat -A $CHAIN_PREROUTING -m set --match-set "$IPSET_NAME" dst,dst -j RETURN
     fi
 
     # 4. 填充 PREROUTING 链

@@ -85,7 +85,7 @@ func (h *HTTPHandler) buildNewUA(originUA string, replacementUA string, uaRegexp
 }
 
 // ModifyAndForward 是核心处理函数，负责修改 User-Agent 并转发数据
-func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort string, destIP string) {
+func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort string, destIP string, destPort int) {
 	srcReader := h.bufioReaderPool.Get().(*bufio.Reader)
 	srcReader.Reset(src)
 	defer h.bufioReaderPool.Put(srcReader)
@@ -127,7 +127,7 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
 			}
 			if h.config.EnableFirewallUABypass {
-				AddToFirewallSet(destIP, h.config.FirewallIPSetName, h.config.FirewallType)
+				AddToFirewallSet(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType)
 			}
 			io.Copy(dst, srcReader)
 			return
@@ -183,7 +183,7 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				}
 				if isFirewallWhitelisted {
 					logrus.Debugf("[%s] Hit Firewall UA Whitelist: %s", destAddrPort, uaStr)
-					AddToFirewallSet(destIP, h.config.FirewallIPSetName, h.config.FirewallType)
+					AddToFirewallSet(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType)
 
 					shouldReplace = false
 					matchReason = "Hit Firewall UA Whitelist"

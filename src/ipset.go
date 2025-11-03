@@ -1,13 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"os/exec"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
-func AddToFirewallSet(ip, setName, fwType string) {
+func AddToFirewallSet(ip string, port int, setName, fwType string) {
 	if ip == "" || setName == "" {
 		return
 	}
@@ -15,9 +16,13 @@ func AddToFirewallSet(ip, setName, fwType string) {
 	go func() {
 		var cmd *exec.Cmd
 		if fwType == "nft" {
-			cmd = exec.Command("nft", "add", "element", "inet", "fw4", setName, "{", ip, "}")
+			// nft add element inet fw4 <setName> { <ip> . <port> }
+			portStr := fmt.Sprintf("%d", port)
+			cmd = exec.Command("nft", "add", "element", "inet", "fw4", setName, "{", ip, ".", portStr, "}")
 		} else {
-			cmd = exec.Command("ipset", "add", setName, ip)
+			// ipset add <setName> <ip>,<port>
+			ipPort := fmt.Sprintf("%s,%d", ip, port)
+			cmd = exec.Command("ipset", "add", setName, ipPort)
 		}
 
 		errChan := make(chan error, 1)
@@ -30,7 +35,7 @@ func AddToFirewallSet(ip, setName, fwType string) {
 			if err != nil {
 				logrus.Debugf("Failed to add IP %s to firewall set %s (%s): %v", ip, setName, fwType, err)
 			} else {
-				logrus.Infof("Added IP %s to firewall bypass set %s (%s)", ip, setName, fwType)
+				logrus.Debugf("Added IP %s to firewall bypass set %s (%s)", ip, setName, fwType)
 			}
 		case <-time.After(1 * time.Second):
 			logrus.Warnf("Timeout adding IP %s to firewall set %s (%s)", ip, setName, fwType)
