@@ -18,8 +18,6 @@ CHAIN_PREROUTING="UAmask_prerouting"
 CHAIN_OUTPUT="UAmask_output"
 
 IPSET_NAME="UAmask_bypass_set"
-DNSMASQ_CONF_FILE="/tmp/dnsmasq.d/UAmask_bypass.conf"
-PREDEFINED_LIST_DIR="/etc/UAmask/ipset"
 
 # --- 防火墙检测 ---
 FW_TYPE=""
@@ -69,7 +67,7 @@ set_firewall_nft() {
     local bypass_ips_list
     local force_replace
     local proxy_host
-    local enable_domain_bypass
+    local enable_firewall_set
 
     config_get port "main" "port" "12032"
     config_get iface_list "main" "iface" "br-lan"
@@ -77,7 +75,7 @@ set_firewall_nft() {
     config_get bypass_ports_list "main" "bypass_ports" ""
     config_get bypass_ips_list "main" "bypass_ips" ""
     config_get_bool proxy_host "main" "proxy_host" ""
-    config_get_bool enable_domain_bypass "main" "enable_domain_bypass" "0"
+    config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
 
     # 3. 格式化接口
     local nft_ifaces
@@ -109,17 +107,17 @@ set_firewall_nft() {
     fi
 
     > "${NFT_PATH}"
-    if [ "$enable_domain_bypass" = "1" ] && ! command -v nft >/dev/null 2>&1; then
+    if [ "$enable_firewall_set" = "1" ] && ! command -v nft >/dev/null 2>&1; then
         logger -t "$NAME" "Error: 'nft' command (nftables) is not installed. Domain bypass disabled."
-        enable_domain_bypass="0"
+        enable_firewall_set="0"
     fi
 
-    if [ "$enable_domain_bypass" = "1" ]; then
+    if [ "$enable_firewall_set" = "1" ]; then
         logger -t "$NAME" "Ensuring nftables set '${IPSET_NAME}' exists..."
-        nft add set inet fw4 ${IPSET_NAME} "{ type ipv4_addr ;flags interval ; }"
+        nft add set inet fw4 ${IPSET_NAME} "{ type ipv4_addr ;timeout 10m ; }"
         if [ $? -ne 0 ]; then
              logger -t "$NAME" "Error: Failed to create nftables set '${IPSET_NAME}'. Domain bypass disabled."
-             enable_domain_bypass="0"
+             enable_firewall_set="0"
         fi
     fi
 
@@ -128,7 +126,7 @@ cat > "${NFT_PATH}" << EOF
 chain UAmask_prerouting_before {
     type nat hook prerouting priority dstnat - 1;
     
-    $( [ "$enable_domain_bypass" = "1" ] && echo "iifname $nft_ifaces ip protocol tcp ip daddr @$IPSET_NAME return" )
+    $( [ "$enable_firewall_set" = "1" ] && echo "iifname $nft_ifaces ip protocol tcp ip daddr @$IPSET_NAME return" )
 
     iifname $nft_ifaces ip protocol tcp \\
     $nft_ips_rule
@@ -144,7 +142,7 @@ cat >> "${NFT_PATH}" << EOF
 chain UAmask_output_after {
     type nat hook output priority -100;
 
-    $( [ "$enable_domain_bypass" = "1" ] && echo "ip protocol tcp ip daddr @$IPSET_NAME return" )
+    $( [ "$enable_firewall_set" = "1" ] && echo "ip protocol tcp ip daddr @$IPSET_NAME return" )
 
     ip protocol tcp \\
     # 豁免局域网、环回、保留地址等
@@ -211,7 +209,7 @@ set_firewall_ipt() {
     local bypass_ports_list
     local bypass_ips_list
     local proxy_host
-    local enable_domain_bypass
+    local enable_firewall_set
 
     config_get port "main" "port" "12032"
     config_get iface_list "main" "iface" "br-lan"
@@ -220,14 +218,14 @@ set_firewall_ipt() {
     config_get bypass_ips_list "main" "bypass_ips" ""
     config_get_bool proxy_host "main" "proxy_host" ""
 
-    config_get_bool enable_domain_bypass "main" "enable_domain_bypass" "0"
-    if [ "$enable_domain_bypass" = "1" ]; then
+    config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
+    if [ "$enable_firewall_set" = "1" ]; then
         if ! command -v ipset >/dev/null 2>&1; then
             logger -t "$NAME" "Error: 'ipset' package is not installed. Domain bypass disabled."
-            enable_domain_bypass="0"
+            enable_firewall_set="0"
         else
             logger -t "$NAME" "Creating ipset '$IPSET_NAME' for domain bypass..."
-            ipset create "$IPSET_NAME" hash:ip -exist
+            ipset create "$IPSET_NAME" hash:ip timeout 600 -exist
         fi
     fi
     # --- IPTABLES 规则设置 ---
@@ -236,7 +234,7 @@ set_firewall_ipt() {
     $IPT -t nat -N $CHAIN_PREROUTING
     $IPT -t nat -N $CHAIN_OUTPUT
 
-    if [ "$enable_domain_bypass" = "1" ]; then
+    if [ "$enable_firewall_set" = "1" ]; then
         $IPT -t nat -A $CHAIN_PREROUTING -m set --match-set "$IPSET_NAME" dst -j RETURN
     fi
 
@@ -256,7 +254,7 @@ set_firewall_ipt() {
     # 5. OUTPUT 链处理本机流量
     if [ "$proxy_host" = "1" ]; then
         # 域名绕过规则
-        if [ "$enable_domain_bypass" = "1" ]; then
+        if [ "$enable_firewall_set" = "1" ]; then
             $IPT -t nat -A $CHAIN_OUTPUT -m set --match-set "$IPSET_NAME" dst -j RETURN
         fi
         # 豁免 UAmask 自己的流量 (通过 GID)
@@ -323,53 +321,6 @@ setup_group() {
     fi
 }
 
-# 设置 dnsmasq 域名绕过规则
-unset_dnsmasq_bypass() {
-    if [ -f "$DNSMASQ_CONF_FILE" ]; then
-        rm -f "$DNSMASQ_CONF_FILE"
-        service dnsmasq reload >/dev/null 2>&1
-    fi
-}
-
-set_dnsmasq_bypass() {
-    config_load "$NAME"
-    local enable_domain_bypass
-    config_get_bool enable_domain_bypass "main" "enable_domain_bypass" "0"
-
-    mkdir -p /tmp/dnsmasq.d
-
-    if [ "$enable_domain_bypass" = "0" ]; then
-        unset_dnsmasq_bypass
-        return
-    fi
-
-    logger -t "$NAME" "Generating domain bypass list for ipset '$IPSET_NAME'..."
-        
-    # 启动时先清空旧配置
-    echo "# Generated by $NAME for domain bypass" > "$DNSMASQ_CONF_FILE"
-
-    local predefined_lists
-    config_get predefined_lists "main" "predefined_bypass_lists" ""
-    
-    for list_key in $predefined_lists; do
-        local list_file="${PREDEFINED_LIST_DIR}/${list_key}.list"
-        if [ -f "$list_file" ]; then
-            logger -t "$NAME" "Loading bypass list: $list_file"
-            local dnsmasq_directive
-            if [ "$FW_TYPE" = "nft" ]; then
-                dnsmasq_directive="nftset=/&/4#inet#fw4#${IPSET_NAME}"
-            else
-                dnsmasq_directive="ipset=/&/${IPSET_NAME}"
-            fi
-            cat "$list_file" |grep -v -e "^#" -e "^[[:space:]]*$" | sed -e "s|.*|${dnsmasq_directive}|">> "$DNSMASQ_CONF_FILE"
-        else
-            logger -t "$NAME" "Warning: Bypass list file not found: $list_file"
-        fi
-    done
-
-    # 3. 重启 dnsmasq 使配置生效
-    service dnsmasq reload >/dev/null 2>&1
-}
 
 start_service() {
     logger -t "$NAME" "Starting $NAME with firewall $FW_TYPE..."
@@ -395,8 +346,11 @@ start_service() {
     config_get log_file "main" "log_file" "/tmp/UAmask/UAmask.log"
     config_get whitelist "main" "whitelist" ""
 
-    mkdir -p "$PREDEFINED_LIST_DIR"
-    set_dnsmasq_bypass
+    local firewall_ua_whitelist
+    local enable_firewall_set
+    config_get firewall_ua_whitelist "main" "Firewall_ua_whitelist" ""
+    config_get_bool firewall_ua_bypass "main" "Firewall_ua_bypass" "0"
+    config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
 
     mkdir -p "$(dirname "$log_file")"
 
@@ -419,6 +373,23 @@ start_service() {
     procd_append_param command -w "$whitelist"
     [ -n "$log_file" ] && procd_append_param command -log "$log_file"
 
+    # ipset参数
+    if [ "$enable_firewall_set" = "1" ]; then
+        logger -t "$NAME" "Firewall set feature enabled. Passing flags to service."
+        
+        procd_append_param command -fw-type "$FW_TYPE"
+        procd_append_param command -fw-set-name "$IPSET_NAME"
+        
+        [ -n "$firewall_ua_whitelist" ] && procd_append_param command -fw-ua-w "$firewall_ua_whitelist"
+        
+        if [ "$firewall_ua_bypass" = "1" ]; then
+            procd_append_param command -fw-bypass
+        fi
+    else
+         logger -t "$NAME" "Firewall set feature disabled. Skipping firewall flags."
+    fi
+
+    #  处理“运行模式”
     local operating_profile
     config_get operating_profile "main" "operating_profile" "high_throughput"
 
@@ -519,7 +490,6 @@ stop_service() {
     logger -t "$NAME" "Stopping $NAME..."
     # 停止服务时自动清理防火墙
     unset_firewall
-    unset_dnsmasq_bypass
     # procd 会自动使用 pidfile 停止 start-stop-daemon
 }
 

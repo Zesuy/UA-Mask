@@ -49,12 +49,8 @@ func (s *Server) Run() error {
 		for {
 			conn, err := listener.AcceptTCP()
 			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Temporary() {
-					logrus.Warnf("Temporary accept error: %v; sleeping for 5ms", err)
-					time.Sleep(5 * time.Millisecond)
-					continue
-				}
-				logrus.Errorf("Accept error: %v", err)
+				logrus.Warnf("Accept error: %v; retrying...", err)
+				time.Sleep(5 * time.Millisecond)
 				continue
 			}
 			connChan <- conn
@@ -66,12 +62,8 @@ func (s *Server) Run() error {
 		for {
 			conn, err := listener.AcceptTCP()
 			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Temporary() {
-					logrus.Warnf("Temporary accept error: %v; sleeping for 5ms", err)
-					time.Sleep(5 * time.Millisecond)
-					continue
-				}
-				logrus.Errorf("Accept error: %v", err)
+				logrus.Warnf("Accept error: %v; retrying...", err)
+				time.Sleep(5 * time.Millisecond)
 				continue
 			}
 			go s.handleConnection(conn)
@@ -95,6 +87,7 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 
 	destAddrPort := originalDst.String()
 	clientAddr := clientConn.RemoteAddr()
+
 	logrus.Debugf("Connection: %s -> %s (original: %s)",
 		clientAddr.String(),
 		clientConn.LocalAddr().String(),
@@ -114,7 +107,7 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 	// 客户端 -> 服务器 (调用 handler 修改 UA)
 	go func() {
 		defer serverConn.CloseWrite()
-		s.handler.ModifyAndForward(serverConn, clientConn, destAddrPort)
+		s.handler.ModifyAndForward(serverConn, clientConn, destAddrPort, originalDst.IP.String())
 		done <- struct{}{}
 	}()
 

@@ -186,51 +186,24 @@ iface = main:taboption("network", Value, "iface", "监听接口")
 iface.default = "br-lan"
 iface.description = "指定监听的lan口"
 
--- 总开关
-enable_domain_bypass = main:taboption("network", Flag, "enable_domain_bypass", "启用域名绕过 (IPSet)")
-enable_domain_bypass.default = 0
-enable_domain_bypass.description = "启用后，将自动解析指定域名列表，并将其 IP 加入 ipset 进行流量绕过。<br><b>依赖: <code>ipset</code> 软件包。</b>"
+enable_firewall_set = main:taboption("network", Flag, "enable_firewall_set", "启用防火墙 Set 绕过 (实验性)")
+enable_firewall_set.default = 0
+enable_firewall_set.description = "<b>[实验性功能]</b> 启用后，将创建一个 ipset (fw3) 或 nfset (fw4)，用于动态绕过特定目标 IP，不会再进入UAmask处理，这将大幅提升性能，但可能造成部分ua未被修改。<br> 如果您使用iptables，请确保安装ipset软件包"
 
--- 预设列表
-predefined_bypass_lists = main:taboption("network", MultiValue, "predefined_bypass_lists", "预设绕过列表")
-predefined_bypass_lists:depends("enable_domain_bypass", "1")
-predefined_bypass_lists:value("steam", "Steam下载CDN")
-predefined_bypass_lists:value("custom", "自定义列表")
-predefined_bypass_lists.description = "选择需要绕过的预设域名列表。"
+Firewall_ua_whitelist= main:taboption("network", Value, "Firewall_ua_whitelist", "防火墙 UA 白名单")
+Firewall_ua_whitelist:depends("enable_firewall_set", "1")
+Firewall_ua_whitelist.placeholder = ""
+Firewall_ua_whitelist.description = "指定不通过 UAmask 代理的UA关键词(防火墙级别绕过)，用逗号分隔 (如: 'steam',360pcdn')"
 
--- 自定义列表
-local custom_list_path = "/etc/UAmask/ipset/custom.list"
+Firewall_ua_bypass=main:taboption("network", Flag, "Firewall_ua_bypass", "使用防火墙非http绕过")
+Firewall_ua_bypass:depends("enable_firewall_set", "1")
+Firewall_ua_bypass.description = "启用后，将绕过使用非http流量的ip，10分钟内不再通过 UAmask 代理。"
 
-custom_bypass_file_editor = main:taboption("network", TextValue, "custom_bypass_file_editor", "自定义绕过域名列表")
-custom_bypass_file_editor:depends("enable_domain_bypass", "1")
-custom_bypass_file_editor.rows = 10
-custom_bypass_file_editor.wrap = "off"
-custom_bypass_file_editor.description = "每行一个域名。<b>此内容将直接保存到 /etc/UAmask/custom.list</b>"
-
-custom_bypass_file_editor.cfgvalue = function(self, section)
-    if nixio.fs.access(custom_list_path) then
-        local f = io.open(custom_list_path, "r")
-        if f then
-            local content = f:read("*a")
-            f:close()
-            return content
-        end
-    end
-    return "# 在此输入自定义域名，例如:\n# .google.com\n# example.com"
-end
-
-custom_bypass_file_editor.write = function(self, section, value)
-    luci.sys.exec("mkdir -p /etc/UAmask") 
-    local f = io.open(custom_list_path, "w")
-    if f then
-        f:write(value or "")
-        f:close()
-    end
-end
 proxy_host = main:taboption("network", Flag, "proxy_host", "代理主机流量")
 proxy_host.description = "启用后将代理主机自身的流量。如果需要尽量避免和其他代理冲突，请禁用此选项。"
 
 bypass_gid = main:taboption("network", Value, "bypass_gid", "绕过 GID")
+bypass_gid:depends("proxy_host", "1")
 bypass_gid.default = "65533"
 bypass_gid.datatype = "uinteger"
 bypass_gid.description = "用于绕过 TPROXY 自身流量的 GID。"

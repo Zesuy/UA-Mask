@@ -11,39 +11,47 @@ import (
 
 // Config 结构体保存所有应用配置
 type Config struct {
-	UserAgent            string
-	Port                 int
-	LogLevel             string
-	ShowVer              bool
-	LogFile              string
-	Whitelist            []string
-	ForceReplace         bool
-	EnableRegex          bool
-	EnablePartialReplace bool
-	KeywordsList         []string
-	UAPattern            string
-	UARegexp             *regexp.Regexp
-	CacheSize            int
-	BufferSize           int
-	PoolSize             int
+	UserAgent              string
+	Port                   int
+	LogLevel               string
+	ShowVer                bool
+	LogFile                string
+	Whitelist              []string
+	ForceReplace           bool
+	EnableRegex            bool
+	EnablePartialReplace   bool
+	KeywordsList           []string
+	UAPattern              string
+	UARegexp               *regexp.Regexp
+	CacheSize              int
+	BufferSize             int
+	PoolSize               int
+	FirewallUAWhitelist    []string // 防火墙 UA 白名单
+	EnableFirewallUABypass bool     // 启用防火墙非 HTTP 绕过
+	FirewallIPSetName      string   // 防火墙 set 名称
+	FirewallType           string   // 防火墙类型 (ipt or nft)
 }
 
 func NewConfig() (*Config, error) {
 	var (
-		userAgent            string
-		port                 int
-		logLevel             string
-		showVer              bool
-		forceReplace         bool
-		enablePartialReplace bool
-		uaPattern            string
-		logFile              string
-		whitelistArg         string
-		keywords             string
-		enableRegex          bool
-		cacheSize            int
-		bufferSize           int
-		poolSize             int
+		userAgent              string
+		port                   int
+		logLevel               string
+		showVer                bool
+		forceReplace           bool
+		enablePartialReplace   bool
+		uaPattern              string
+		logFile                string
+		whitelistArg           string
+		keywords               string
+		enableRegex            bool
+		cacheSize              int
+		bufferSize             int
+		poolSize               int
+		firewallUAWhitelistArg string
+		enableFirewallUABypass bool
+		firewallIPSetName      string
+		firewallType           string
 	)
 
 	// 2. 注册 flag
@@ -66,6 +74,12 @@ func NewConfig() (*Config, error) {
 	flag.IntVar(&bufferSize, "buffer-size", 8192, "I/O buffer size (bytes)")
 	flag.IntVar(&poolSize, "p", 0, "Worker pool size (0 or less = one goroutine per connection)")
 
+	// 防火墙绕过
+	flag.StringVar(&firewallUAWhitelistArg, "fw-ua-w", "", "Comma-separated User-Agent firewall whitelist keywords")
+	flag.BoolVar(&enableFirewallUABypass, "fw-bypass", false, "Enable firewall bypass for non-HTTP traffic")
+	flag.StringVar(&firewallIPSetName, "fw-set-name", "UAmask_bypass_set", "Firewall ipset/nfset name")
+	flag.StringVar(&firewallType, "fw-type", "ipt", "Firewall type (ipt or nft)")
+
 	// 3. 解析 flag
 	flag.Parse()
 
@@ -84,6 +98,11 @@ func NewConfig() (*Config, error) {
 		PoolSize:             poolSize,
 		Whitelist:            []string{},
 		KeywordsList:         []string{},
+
+		FirewallUAWhitelist:    []string{},
+		EnableFirewallUABypass: enableFirewallUABypass,
+		FirewallIPSetName:      firewallIPSetName,
+		FirewallType:           firewallType,
 	}
 
 	// 处理白名单
@@ -93,6 +112,17 @@ func NewConfig() (*Config, error) {
 			s = strings.TrimSpace(s)
 			if s != "" {
 				cfg.Whitelist = append(cfg.Whitelist, s)
+			}
+		}
+	}
+
+	// 防火墙 UA 白名单
+	if firewallUAWhitelistArg != "" {
+		parts := strings.Split(firewallUAWhitelistArg, ",")
+		for _, s := range parts {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				cfg.FirewallUAWhitelist = append(cfg.FirewallUAWhitelist, s)
 			}
 		}
 	}
@@ -129,6 +159,12 @@ func (c *Config) LogConfig(version string) {
 	logrus.Infof("Cache Size: %d", c.CacheSize)
 	logrus.Infof("Buffer Size: %d", c.BufferSize)
 	logrus.Infof("Worker Pool Size: %d", c.PoolSize)
+
+	// 日志
+	logrus.Infof("Firewall Type: %s", c.FirewallType)
+	logrus.Infof("Firewall IPSet Name: %s", c.FirewallIPSetName)
+	logrus.Infof("Firewall UA Whitelist: %v", c.FirewallUAWhitelist)
+	logrus.Infof("Enable Firewall Non-HTTP Bypass: %v", c.EnableFirewallUABypass)
 
 	if c.ForceReplace {
 		logrus.Infof("Mode: Force Replace (All)")

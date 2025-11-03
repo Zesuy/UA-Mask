@@ -85,7 +85,7 @@ func (h *HTTPHandler) buildNewUA(originUA string, replacementUA string, uaRegexp
 }
 
 // ModifyAndForward 是核心处理函数，负责修改 User-Agent 并转发数据
-func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort string) {
+func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort string, destIP string) {
 	srcReader := h.bufioReaderPool.Get().(*bufio.Reader)
 	srcReader.Reset(src)
 	defer h.bufioReaderPool.Put(srcReader)
@@ -103,6 +103,7 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 
 	for {
 		is_http, err := h.isHTTP(srcReader)
+		//检测失败
 		if err != nil {
 			if err == io.EOF || strings.Contains(err.Error(), "use of closed network connection") {
 				logrus.Debugf("[%s] Connection closed (EOF or closed in loop)", destAddrPort)
@@ -124,6 +125,9 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 			// 刷新已缓冲的数据
 			if err_flush := dstWriter.Flush(); err_flush != nil {
 				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
+			}
+			if h.config.EnableFirewallUABypass {
+				AddToFirewallSet(destIP, h.config.FirewallIPSetName, h.config.FirewallType)
 			}
 			io.Copy(dst, srcReader)
 			return
@@ -168,6 +172,24 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				var matchReason string
 
 				// 1. 检查白名单 (最高优先级)
+				isFirewallWhitelisted := false
+				if len(h.config.FirewallUAWhitelist) > 0 {
+					for _, fw_keyword := range h.config.FirewallUAWhitelist {
+						if strings.Contains(uaStr, fw_keyword) {
+							isFirewallWhitelisted = true
+							break
+						}
+					}
+				}
+				if isFirewallWhitelisted {
+					logrus.Debugf("[%s] Hit Firewall UA Whitelist: %s", destAddrPort, uaStr)
+					AddToFirewallSet(destIP, h.config.FirewallIPSetName, h.config.FirewallType)
+
+					shouldReplace = false
+					matchReason = "Hit Firewall UA Whitelist"
+
+				}
+
 				isInWhiteList := false
 				for _, v := range h.config.Whitelist {
 					if v == uaStr {
