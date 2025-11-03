@@ -23,7 +23,7 @@
 1) 安装（任选其一）
 
 - 预编译包：到 Releases 下载与你设备架构匹配的 `.ipk`，然后在路由器上安装。
-  - iptables 用户若要启用“防火墙 Set 绕过”，请先安装 ipset。
+  - iptables 用户若要启用“防火墙加速”，请先安装 ipset。
 
   ```sh
   opkg update
@@ -48,7 +48,7 @@
 - 代理主机流量：如果你的路由“本机”也需要被修改 UA，才开启。与 OpenClash 共存时建议遵循下文“完美分流方案”。
 - 绕过目标端口：默认 22 443。
   - 若你“安全优先”，建议移除 443（原因见下文“安全优先方案”）。
-- 启用防火墙 Set 绕过（可选，高性能）：iptables 用户务必先装 ipset。
+- 启用防火墙加速（可选，高性能）：iptables 用户务必先装 ipset。
 
 5) 保存并应用。运行状态显示“运行中”。
 
@@ -87,7 +87,7 @@
 
 - 监听端口（port）：默认 12032。
 - 监听接口（iface）：默认 br-lan，可多接口空格分隔。
-- 启用防火墙 Set 绕过（enable_firewall_set）：创建 ipset/nfset 以“跳过”特定 ip:port，提高性能（见下节“防火墙绕过”）。
+- 启用防火墙加速（enable_firewall_set）：创建 ipset/nfset 以“跳过”特定 ip:port，提高性能（见下节“防火墙绕过”）。
 - 防火墙 UA 白名单（Firewall_ua_whitelist）：命中这些 UA 的连接，直接将“目标 ip:port”加入 set 绕过（典型如 Steam）。
 - 使用防火墙非 HTTP 绕过（Firewall_ua_bypass）：一旦识别为“非 HTTP”，临时绕过该 ip:port（默认 10 分钟）。
 - 代理主机流量（proxy_host）：是否也代理路由器自身的流量；为避免与其他代理回环冲突，若不需要可关闭。
@@ -174,13 +174,13 @@ graph LR
 
 ## 防火墙绕过（基于 ipset/nfset）
 
-为降低 CPU 负载、提升高并发性能，引入“set 绕过”。启用路径：服务 -> UA-Mask -> 网络与防火墙 -> 勾选“启用防火墙 Set 绕过”。
+为降低 CPU 负载、提升高并发性能，引入“set 绕过”。启用路径：服务 -> UA-Mask -> 网络与防火墙 -> 勾选“启用防火墙加速”。
 
 iptables 用户：请先安装 ipset。
 
 包含两种绕过：
 
-1) 非 HTTP 流量绕过（Firewall_ua_bypass）
+1) 绕过非http流量（Firewall_ua_bypass）
 
 - 原理：识别到某连接是“非 HTTP”后，将其目标 ip:port 暂存到 UAmask_bypass_set（默认超时 10 分钟）。
 - 效果：该 ip:port 的后续新连接被防火墙直接放行，不再进入 UA-Mask 检测，显著减负。
@@ -202,11 +202,11 @@ iptables 用户：请先安装 ipset。
 方案一：性能优先（大多数环境）
 
 - 匹配规则：正则 + 部分替换（兼容性好）。
-- 启用防火墙 Set 绕过；同时开启“非 HTTP 绕过”和“UA 白名单”（加入 Steam 等关键词）。
+- 启用防火墙加速；同时开启“非 HTTP 绕过”和“UA 白名单”（加入 Steam 等关键词）。
 
 方案二：安全优先（严格环境）
 
-- 关闭防火墙 Set 绕过与 UA 白名单。
+- 关闭防火墙加速与 UA 白名单。
 - 检查“绕过目标端口”中移除 443，以防极少数明文 HTTP 走 443 导致 UA 泄露。
 
 ---
