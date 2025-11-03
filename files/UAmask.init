@@ -356,6 +356,7 @@ start_service() {
 
     procd_open_instance "$NAME"
     procd_set_param command "$PROG"
+    procd_set_param limits nofile="65536 65536"
 
     #  使用 append_param 逐个添加参数
     if [ "$proxy_host" = "1" ]; then

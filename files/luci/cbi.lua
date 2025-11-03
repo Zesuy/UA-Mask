@@ -193,7 +193,7 @@ enable_firewall_set.description = "<b>[实验性功能]</b> 启用后，将创�
 Firewall_ua_whitelist= main:taboption("network", Value, "Firewall_ua_whitelist", "防火墙 UA 白名单")
 Firewall_ua_whitelist:depends("enable_firewall_set", "1")
 Firewall_ua_whitelist.placeholder = ""
-Firewall_ua_whitelist.description = "指定不通过 UAmask 代理的 UA 关键词（防火墙级别绕过），用逗号分隔（如：steam,360pcdn）。"
+Firewall_ua_whitelist.description = "指定不通过 UAmask 代理的 UA 关键词（防火墙级别绕过），用逗号分隔（如：Valve/Steam,360pcdn）。"
 
 Firewall_ua_bypass=main:taboption("network", Flag, "Firewall_ua_bypass", "使用防火墙非 HTTP 绕过")
 Firewall_ua_bypass:depends("enable_firewall_set", "1")
