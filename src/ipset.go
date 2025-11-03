@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
+	"regexp"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -12,7 +14,17 @@ func AddToFirewallSet(ip string, port int, setName, fwType string) {
 	if ip == "" || setName == "" {
 		return
 	}
+	// 验证 IP 地址格式
+	if net.ParseIP(ip) == nil {
+		logrus.Warnf("Invalid IP address: %s", ip)
+		return
+	}
 
+	// 验证集合名称（只允许字母、数字、下划线）
+	if !regexp.MustCompile(`^[a-zA-Z0-9_]+$`).MatchString(setName) {
+		logrus.Warnf("Invalid set name: %s", setName)
+		return
+	}
 	go func() {
 		var cmd *exec.Cmd
 		if fwType == "nft" {

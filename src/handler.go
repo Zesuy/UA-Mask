@@ -115,8 +115,10 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 			if err_flush := dstWriter.Flush(); err_flush != nil {
 				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
 			}
-			// 回退到
-			io.Copy(dst, srcReader)
+			// 回退到io.copy
+			if _, err := io.Copy(dst, srcReader); err != nil && err != io.EOF {
+				logrus.Debugf("[%s] Fallback copy error: %v", destAddrPort, err)
+			}
 			return
 		}
 
@@ -129,7 +131,9 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 			if h.config.EnableFirewallUABypass {
 				AddToFirewallSet(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType)
 			}
-			io.Copy(dst, srcReader)
+			if _, err := io.Copy(dst, srcReader); err != nil && err != io.EOF {
+				logrus.Debugf("[%s] Fallback copy error: %v", destAddrPort, err)
+			}
 			return
 		}
 
@@ -260,7 +264,7 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 			}
 		}
 
-		// 6. 将头部写回目标
+		// 6. 写回目标
 		if err := request.Write(dstWriter); err != nil {
 			logrus.Debugf("[%s] HTTP write request error: %v", destAddrPort, err)
 			request.Body.Close()

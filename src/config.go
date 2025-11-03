@@ -127,6 +127,17 @@ func NewConfig() (*Config, error) {
 		}
 	}
 
+	// 验证配置
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return nil, fmt.Errorf("invalid port: %d", cfg.Port)
+	}
+	if cfg.BufferSize < 1024 || cfg.BufferSize > 65536 {
+		return nil, fmt.Errorf("invalid buffer size: %d", cfg.BufferSize)
+	}
+	if cfg.CacheSize < 0 {
+		return nil, fmt.Errorf("invalid cache size: %d", cfg.CacheSize)
+	}
+
 	// 根据模式处理 keywords 或 regex
 	if cfg.EnableRegex {
 		// 正则模式
@@ -167,13 +178,10 @@ func (c *Config) LogConfig(version string) {
 	logrus.Infof("Enable Firewall Non-HTTP Bypass: %v", c.EnableFirewallUABypass)
 
 	if c.ForceReplace {
-		logrus.Infof("Mode: Force Replace (All)")
+		logrus.Info("Mode: Force Replace (All)")
 	} else if c.EnableRegex {
-		logrus.Infof("Mode: Regex")
-		logrus.Infof("User-Agent Regex Pattern: %s", c.UAPattern)
-		logrus.Infof("Enable Partial Replace: %v", c.EnablePartialReplace)
+		logrus.Infof("Mode: Regex | Pattern: %s | Partial Replace: %v", c.UAPattern, c.EnablePartialReplace)
 	} else {
-		logrus.Infof("Mode: Keywords")
-		logrus.Infof("Keywords: %v", c.KeywordsList)
+		logrus.Infof("Mode: Keywords | Keywords: %v", c.KeywordsList)
 	}
 }

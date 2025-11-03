@@ -93,20 +93,38 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 		clientConn.LocalAddr().String(),
 		destAddrPort)
 
-	// 连接到原始目标
-	serverConn, err := net.DialTCP("tcp", nil, originalDst)
+	// 使用 DialTimeout 连接到原始目标
+	var serverConn net.Conn
+	var Timeout time.Duration = 5 * time.Minute
+	if Timeout > 0 {
+		dialer := net.Dialer{Timeout: Timeout}
+		serverConn, err = dialer.Dial("tcp", destAddrPort)
+	} else {
+		serverConn, err = net.Dial("tcp", destAddrPort)
+	}
+
 	if err != nil {
 		logrus.Debugf("Failed to connect to %s: %v", destAddrPort, err)
 		return
 	}
 	defer serverConn.Close()
 
+	// 为两个连接设置 I/O 超时
+	if Timeout > 0 {
+		deadline := time.Now().Add(Timeout)
+		clientConn.SetDeadline(deadline)
+		serverConn.SetDeadline(deadline)
+		// 使用 defer 确保在函数退出时清除 deadline
+		defer clientConn.SetDeadline(time.Time{})
+		defer serverConn.SetDeadline(time.Time{})
+	}
+
 	// 双向转发数据
 	done := make(chan struct{}, 2)
 
 	// 客户端 -> 服务器 (调用 handler 修改 UA)
 	go func() {
-		defer serverConn.CloseWrite()
+		defer serverConn.(*net.TCPConn).CloseWrite()
 		s.handler.ModifyAndForward(serverConn, clientConn, destAddrPort, originalDst.IP.String(), originalDst.Port)
 		done <- struct{}{}
 	}()
