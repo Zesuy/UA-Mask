@@ -245,7 +245,9 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				// 3. 处理日志和缓存
 				if !shouldReplace {
 					logrus.Debugf("[%s] %s: %s. ", destAddrPort, matchReason, uaStr)
-					h.cache.Add(uaStr, uaStr) // 缓存不修改的UA
+					if !isFirewallWhitelisted {
+						h.cache.Add(uaStr, uaStr) // 缓存不修改的UA
+					}
 				} else {
 					logrus.Debugf("[%s] %s: %s", destAddrPort, matchReason, uaStr)
 				}
@@ -257,7 +259,9 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 
 					request.Header.Set("User-Agent", finalUA)
 					h.stats.IncModifiedRequests()
-					h.cache.Add(uaStr, finalUA) //缓存修改后的UA
+					if !isFirewallWhitelisted {
+						h.cache.Add(uaStr, finalUA) // 缓存修改的UA
+					}
 
 					if h.config.ForceReplace {
 						logrus.Debugf("[%s] UA modified (forced): %s -> %s", destAddrPort, uaStr, finalUA)

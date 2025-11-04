@@ -157,7 +157,7 @@ func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewa
 		return
 	}
 
-	m.log.Infof("Executing %d batches...", len(batches))
+	m.log.Debugf("Executing %d batches...", len(batches))
 
 	for key, itemsMap := range batches {
 		if len(itemsMap) == 0 {
@@ -218,7 +218,7 @@ func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewa
 				m.log.Warnf("Failed to execute batch for set %s (%s): %v",
 					setName, fwType, err)
 			} else {
-				m.log.Infof("Successfully added %d unique IPs to firewall set %s (%s)",
+				m.log.Debugf("Successfully added %d unique IPs to firewall set %s (%s)",
 					itemCount, setName, fwType)
 			}
 		case <-time.After(10 * time.Second):

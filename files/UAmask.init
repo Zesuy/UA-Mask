@@ -380,9 +380,9 @@ start_service() {
         
         procd_append_param command -fw-type "$FW_TYPE"
         procd_append_param command -fw-set-name "$IPSET_NAME"
-        config_get Firewal_drop_on_match "main" "Firewall_drop_on_match" "0"
+        config_get Firewall_drop_on_match "main" "Firewall_drop_on_match" "0"
         
-        if [ "$firewall_drop_on_match" = "1" ]; then
+        if [ "$Firewall_drop_on_match" = "1" ]; then
             procd_append_param command -fw-drop
         fi
         
