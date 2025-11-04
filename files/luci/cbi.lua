@@ -40,7 +40,7 @@ UAmask = Map("UAmask",
         display: none !important;
     }
     </style>
-        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本：0.4.0</a>
+        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本：0.4.1</a>
         <br>
         用于修改 User-Agent 的透明代理，使用 REDIRECT 技术实现。
         <br>
