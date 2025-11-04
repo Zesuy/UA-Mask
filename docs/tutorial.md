@@ -90,7 +90,7 @@
 - 启用防火墙加速（enable_firewall_set）：创建 ipset/nfset 以“跳过”特定 ip:port，提高性能（见下节“防火墙绕过”）。
 - 防火墙 UA 白名单（Firewall_ua_whitelist）：命中这些 UA 的连接，直接将“目标 ip:port”加入 set 绕过（典型如 Steam）。
 - 使用防火墙非 HTTP 绕过（Firewall_ua_bypass）：一旦识别为“非 HTTP”，临时绕过该 ip:port（默认 10 分钟）。
-- 匹配时断开连接: 一旦匹配上面的防火墙规则，将立刻断开连接，强制流量不进入UAmask,这将有利于ipset马上生效。而不必等下一次连接开始。
+- 匹配时断开连接: 一旦UA规则，将立刻断开连接，强制流量不进入UAmask,这将有利于ipset马上生效。而不必等下一次连接开始。
 - 代理主机流量（proxy_host）：是否也代理路由器自身的流量；为避免与其他代理回环冲突，若不需要可关闭。
 - 绕过 GID（bypass_gid）：默认 65533，用于豁免自身流量；脚本同时豁免 OpenClash 的 65534，防循环。
 - 绕过目标端口（bypass_ports）：默认“22 443”。
@@ -191,6 +191,7 @@ iptables 用户：请先安装 ipset。
 - 原理：若某连接的 UA 命中你的“UA 关键词”，立即把该目标 ip:port 加入 set 绕过。
 - 适用：高带宽、长连接但 UA“无敏感标识”的流量（如 Steam 下载）。
 - 示例关键词：Valve/Steam, steam, steamworks, 360pcdn, ByteDancePcdn（按需取舍）。
+- 选项：匹配时断开连接，启用该选项将在匹配到UA时马上断开连接，这将让steam等流量完全不会进入UA-Mask，但这可能会让steam提示无法连接到服务器，建议多试几次，若非苛求性能不建议启用
 
 重要提醒（性能 vs 风险）
 
