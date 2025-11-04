@@ -380,6 +380,8 @@ start_service() {
         
         procd_append_param command -fw-type "$FW_TYPE"
         procd_append_param command -fw-set-name "$IPSET_NAME"
+        config_get Firewal_drop_on_match "main" "Firewall_drop_on_match" "0"
+        procd_append_param command -fw-drop "$Firewal_drop_on_match"
         
         [ -n "$firewall_ua_whitelist" ] && procd_append_param command -fw-ua-w "$firewall_ua_whitelist"
         
@@ -389,6 +391,7 @@ start_service() {
     else
          logger -t "$NAME" "Firewall set feature disabled. Skipping firewall flags."
     fi
+
 
     #  处理“运行模式”
     local operating_profile

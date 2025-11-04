@@ -30,6 +30,7 @@ type Config struct {
 	EnableFirewallUABypass bool     // 启用防火墙非 HTTP 绕过
 	FirewallIPSetName      string   // 防火墙 set 名称
 	FirewallType           string   // 防火墙类型 (ipt or nft)
+	FirewallDropOnMatch    bool     // 防火墙匹配时断开连接
 }
 
 func NewConfig() (*Config, error) {
@@ -52,6 +53,7 @@ func NewConfig() (*Config, error) {
 		enableFirewallUABypass bool
 		firewallIPSetName      string
 		firewallType           string
+		firewallDropOnMatch    bool
 	)
 
 	// 2. 注册 flag
@@ -79,6 +81,7 @@ func NewConfig() (*Config, error) {
 	flag.BoolVar(&enableFirewallUABypass, "fw-bypass", false, "Enable firewall bypass for non-HTTP traffic")
 	flag.StringVar(&firewallIPSetName, "fw-set-name", "UAmask_bypass_set", "Firewall ipset/nfset name")
 	flag.StringVar(&firewallType, "fw-type", "ipt", "Firewall type (ipt or nft)")
+	flag.BoolVar(&firewallDropOnMatch, "fw-drop", false, "Drop connections that match firewall rules")
 
 	// 3. 解析 flag
 	flag.Parse()
@@ -103,6 +106,7 @@ func NewConfig() (*Config, error) {
 		EnableFirewallUABypass: enableFirewallUABypass,
 		FirewallIPSetName:      firewallIPSetName,
 		FirewallType:           firewallType,
+		FirewallDropOnMatch:    firewallDropOnMatch,
 	}
 
 	// 处理白名单
@@ -176,6 +180,7 @@ func (c *Config) LogConfig(version string) {
 	logrus.Infof("Firewall IPSet Name: %s", c.FirewallIPSetName)
 	logrus.Infof("Firewall UA Whitelist: %v", c.FirewallUAWhitelist)
 	logrus.Infof("Enable Firewall Non-HTTP Bypass: %v", c.EnableFirewallUABypass)
+	logrus.Infof("Firewall Drop On Match: %v", c.FirewallDropOnMatch)
 
 	if c.ForceReplace {
 		logrus.Info("Mode: Force Replace (All)")

@@ -18,9 +18,10 @@ var (
 )
 
 type HTTPHandler struct {
-	config *Config
-	stats  *Stats
-	cache  *lru.Cache[string, string]
+	config    *Config
+	stats     *Stats
+	cache     *lru.Cache[string, string]
+	fwManager *FirewallSetManager
 
 	// bufio.Reader 池
 	bufioReaderPool sync.Pool
@@ -28,11 +29,12 @@ type HTTPHandler struct {
 	bufioWriterPool sync.Pool
 }
 
-func NewHTTPHandler(config *Config, stats *Stats, cache *lru.Cache[string, string]) *HTTPHandler {
+func NewHTTPHandler(config *Config, stats *Stats, cache *lru.Cache[string, string], fwManager *FirewallSetManager) *HTTPHandler {
 	h := &HTTPHandler{
-		config: config,
-		stats:  stats,
-		cache:  cache,
+		config:    config,
+		stats:     stats,
+		cache:     cache,
+		fwManager: fwManager,
 	}
 
 	// 初始化 Reader 池
@@ -129,7 +131,11 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
 			}
 			if h.config.EnableFirewallUABypass {
-				AddToFirewallSet(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType)
+				h.fwManager.Add(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType)
+				if h.config.FirewallDropOnMatch {
+					logrus.Debugf("[%s] FirewallDropOnMatch enabled, dropping connection for protocol switch bypass.", destAddrPort)
+					return
+				}
 			}
 			if _, err := io.Copy(dst, srcReader); err != nil && err != io.EOF {
 				logrus.Debugf("[%s] Fallback copy error: %v", destAddrPort, err)
@@ -187,8 +193,11 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				}
 				if isFirewallWhitelisted {
 					logrus.Debugf("[%s] Hit Firewall UA Whitelist: %s", destAddrPort, uaStr)
-					AddToFirewallSet(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType)
-
+					h.fwManager.Add(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType)
+					if h.config.FirewallDropOnMatch {
+						logrus.Debugf("[%s] FirewallDropOnMatch enabled, dropping connection for protocol switch bypass.", destAddrPort)
+						return
+					}
 					shouldReplace = false
 					matchReason = "Hit Firewall UA Whitelist"
 

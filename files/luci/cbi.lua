@@ -199,6 +199,10 @@ Firewall_ua_bypass=main:taboption("network", Flag, "Firewall_ua_bypass", "绕过
 Firewall_ua_bypass:depends("enable_firewall_set", "1")
 Firewall_ua_bypass.description = "启用后，将绕过使用非 HTTP 流量的 IP 和端口，10 分钟内不再通过 UAmask 代理。"
 
+Firewall_drop_on_match=main:taboption("network", Flag, "Firewall_drop_on_match", "匹配时断开连接")
+Firewall_drop_on_match:depends("enable_firewall_set", "1")
+Firewall_drop_on_match.description = "启用后，当流量匹配非http和 UA 白名单规则时，将直接断开连接，强制其重新建立连接绕过 UAmask。"
+
 proxy_host = main:taboption("network", Flag, "proxy_host", "代理主机流量")
 proxy_host.description = "启用后将代理主机自身的流量。如果需要尽量避免和其他代理冲突，请禁用此选项。"
 
