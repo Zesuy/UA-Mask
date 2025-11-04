@@ -201,48 +201,47 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 					shouldReplace = false
 					matchReason = "Hit Firewall UA Whitelist"
 
-				}
-
-				isInWhiteList := false
-				for _, v := range h.config.Whitelist {
-					if v == uaStr {
-						isInWhiteList = true
-						break
-					}
-				}
-
-				if isInWhiteList {
-					shouldReplace = false
-					matchReason = "Hit User-Agent Whitelist"
 				} else {
-					// 2. 根据模式进行匹配 (使用 h.config)
-					if h.config.ForceReplace {
-						// 强制模式
-						shouldReplace = true
-						matchReason = "Force Replace Mode"
-					} else if h.config.EnableRegex {
-						// 正则模式
-						if h.config.UARegexp != nil && h.config.UARegexp.MatchString(uaStr) {
-							shouldReplace = true
-							matchReason = "Hit User-Agent Pattern"
-						} else {
-							shouldReplace = false
-							matchReason = "Not Hit User-Agent Pattern"
+					isInWhiteList := false
+					for _, v := range h.config.Whitelist {
+						if v == uaStr {
+							isInWhiteList = true
+							break
 						}
-					} else {
-						// 默认：关键词模式
+					}
+
+					if isInWhiteList {
 						shouldReplace = false
-						matchReason = "Not Hit User-Agent Keywords"
-						for _, keyword := range h.config.KeywordsList {
-							if strings.Contains(uaStr, keyword) {
+						matchReason = "Hit User-Agent Whitelist"
+					} else {
+						// 2. 根据模式进行匹配 (使用 h.config)
+						if h.config.ForceReplace {
+							// 强制模式
+							shouldReplace = true
+							matchReason = "Force Replace Mode"
+						} else if h.config.EnableRegex {
+							// 正则模式
+							if h.config.UARegexp != nil && h.config.UARegexp.MatchString(uaStr) {
 								shouldReplace = true
-								matchReason = "Hit User-Agent Keyword"
-								break
+								matchReason = "Hit User-Agent Pattern"
+							} else {
+								shouldReplace = false
+								matchReason = "Not Hit User-Agent Pattern"
+							}
+						} else {
+							// 默认：关键词模式
+							shouldReplace = false
+							matchReason = "Not Hit User-Agent Keywords"
+							for _, keyword := range h.config.KeywordsList {
+								if strings.Contains(uaStr, keyword) {
+									shouldReplace = true
+									matchReason = "Hit User-Agent Keyword"
+									break
+								}
 							}
 						}
 					}
 				}
-
 				// 3. 处理日志和缓存
 				if !shouldReplace {
 					logrus.Debugf("[%s] %s: %s. ", destAddrPort, matchReason, uaStr)
