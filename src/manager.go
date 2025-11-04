@@ -5,55 +5,228 @@ import (
 	"net"
 	"os/exec"
 	"regexp"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
-func AddToFirewallSet(ip string, port int, setName, fwType string) {
+type firewallAddItem struct {
+	ip      string
+	port    int
+	setName string
+	fwType  string
+}
+
+// FirewallSetManager 负责管理队列和唯一的 worker
+type FirewallSetManager struct {
+	queue    chan firewallAddItem
+	stopChan chan struct{}
+	wg       sync.WaitGroup
+	log      *logrus.Logger
+
+	maxBatchSize int
+	maxBatchWait time.Duration
+}
+
+func NewFirewallSetManager(log *logrus.Logger, queueSize int) *FirewallSetManager {
+	return &FirewallSetManager{
+		queue:    make(chan firewallAddItem, queueSize),
+		stopChan: make(chan struct{}),
+		log:      log,
+
+		maxBatchSize: 200,
+		maxBatchWait: 100 * time.Millisecond,
+	}
+}
+
+func (m *FirewallSetManager) Add(ip string, port int, setName, fwType string) {
 	if ip == "" || setName == "" {
 		return
 	}
-	// 验证 IP 地址格式
 	if net.ParseIP(ip) == nil {
-		logrus.Warnf("Invalid IP address: %s", ip)
+		m.log.Warnf("Invalid IP address: %s", ip)
+		return
+	}
+	if !regexp.MustCompile(`^[a-zA-Z0-9_]+$`).MatchString(setName) {
+		m.log.Warnf("Invalid set name: %s", setName)
 		return
 	}
 
-	// 验证集合名称（只允许字母、数字、下划线）
-	if !regexp.MustCompile(`^[a-zA-Z0-9_]+$`).MatchString(setName) {
-		logrus.Warnf("Invalid set name: %s", setName)
+	item := firewallAddItem{
+		ip:      ip,
+		port:    port,
+		setName: setName,
+		fwType:  fwType,
+	}
+
+	select {
+	case m.queue <- item:
+		// 成功
+	case <-time.After(50 * time.Millisecond):
+		m.log.Warnf("Firewall add queue is full. Dropping item for %s", ip)
+	}
+}
+
+// Start consumer worker
+func (m *FirewallSetManager) Start() {
+	m.wg.Add(1)
+	go m.worker()
+	m.log.Info("FirewallSetManager worker started")
+}
+
+// Stop worker
+func (m *FirewallSetManager) Stop() {
+	m.log.Info("Stopping FirewallSetManager worker...")
+	close(m.stopChan)
+	m.wg.Wait() // 等待 worker 完成
+	m.log.Info("FirewallSetManager worker stopped")
+}
+
+func (m *FirewallSetManager) batchKey(item firewallAddItem) string {
+	return fmt.Sprintf("%s:%s", item.fwType, item.setName)
+}
+
+func (m *FirewallSetManager) worker() {
+	defer m.wg.Done()
+	batches := make(map[string]map[string]firewallAddItem)
+
+	// 批处理计时器
+	timer := time.NewTimer(m.maxBatchWait)
+	if !timer.Stop() {
+		<-timer.C
+	}
+
+	for {
+		select {
+		case <-m.stopChan:
+			// 收到停止信号
+			close(m.queue)
+			for item := range m.queue {
+				key := m.batchKey(item)
+				dedupKey := fmt.Sprintf("%s:%d", item.ip, item.port)
+				if _, ok := batches[key]; !ok {
+					batches[key] = make(map[string]firewallAddItem)
+				}
+				batches[key][dedupKey] = item
+			}
+			m.executeBatches(batches)
+			return
+
+		case item := <-m.queue:
+			key := m.batchKey(item)
+			dedupKey := fmt.Sprintf("%s:%d", item.ip, item.port)
+
+			// 检查外层 map 是否已初始化
+			if _, ok := batches[key]; !ok {
+				batches[key] = make(map[string]firewallAddItem)
+			}
+
+			// 添加到内层 map (自动去重)
+			batches[key][dedupKey] = item
+			if len(batches) == 1 && len(batches[key]) == 1 {
+				timer.Reset(m.maxBatchWait)
+			}
+
+			if len(batches[key]) >= m.maxBatchSize {
+				m.log.Debugf("Batch full for %s, executing all pending batches", key)
+				m.executeBatches(batches)
+				batches = make(map[string]map[string]firewallAddItem)
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}
+
+		case <-timer.C:
+			// 计时器触发
+			if len(batches) > 0 {
+				m.log.Debugf("Batch timer expired, executing %d pending batches", len(batches))
+				m.executeBatches(batches)
+				batches = make(map[string]map[string]firewallAddItem)
+			}
+		}
+	}
+}
+
+func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewallAddItem) {
+	if len(batches) == 0 {
 		return
 	}
-	go func() {
-		var cmd *exec.Cmd
-		if fwType == "nft" {
-			// nft add element inet fw4 <setName> { <ip> . <port> }
-			portStr := fmt.Sprintf("%d", port)
-			cmd = exec.Command("nft", "add", "element", "inet", "fw4", setName, "{", ip, ".", portStr, "}")
-		} else {
-			// ipset add <setName> <ip>,<port>
-			ipPort := fmt.Sprintf("%s,%d", ip, port)
-			cmd = exec.Command("ipset", "add", setName, ipPort)
+
+	m.log.Infof("Executing %d batches...", len(batches))
+
+	for key, itemsMap := range batches {
+		if len(itemsMap) == 0 {
+			continue
 		}
+
+		items := make([]firewallAddItem, 0, len(itemsMap))
+		var firstFwType, firstSetName string
+		for _, item := range itemsMap {
+			items = append(items, item)
+			if firstFwType == "" {
+				firstFwType = item.fwType
+				firstSetName = item.setName
+			}
+		}
+
+		fwType := firstFwType
+		setName := firstSetName
+		itemCount := len(items)
+
+		var cmd *exec.Cmd
+
+		if fwType == "nft" {
+			// nft add element inet fw4 <setName> { <ip1> . <port1>, <ip2> . <port2>, ... }
+			args := []string{"add", "element", "inet", "fw4", setName, "{"}
+			for i, item := range items {
+				if i > 0 {
+					args[len(args)-1] = args[len(args)-1] + ","
+				}
+				args = append(args, item.ip, ".", fmt.Sprintf("%d", item.port))
+			}
+			args = append(args, "}")
+			cmd = exec.Command("nft", args...)
+
+		} else { // "ipset"
+			cmd = exec.Command("ipset", "restore")
+			var stdin strings.Builder
+			for _, item := range items {
+				fmt.Fprintf(&stdin, "add %s %s,%d\n", setName, item.ip, item.port)
+			}
+			cmd.Stdin = strings.NewReader(stdin.String())
+		}
+
+		m.log.Debugf("Executing [batch %s]: %s", key, cmd.String())
 
 		errChan := make(chan error, 1)
 		go func() {
-			errChan <- cmd.Run()
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				err = fmt.Errorf("error: %v, output: %s", err, string(output))
+			}
+			errChan <- err
 		}()
 
 		select {
 		case err := <-errChan:
 			if err != nil {
-				logrus.Debugf("Failed to add IP %s to firewall set %s (%s): %v", ip, setName, fwType, err)
+				m.log.Warnf("Failed to execute batch for set %s (%s): %v",
+					setName, fwType, err)
 			} else {
-				logrus.Debugf("Added IP %s to firewall bypass set %s (%s)", ip, setName, fwType)
+				m.log.Infof("Successfully added %d unique IPs to firewall set %s (%s)",
+					itemCount, setName, fwType)
 			}
-		case <-time.After(1 * time.Second):
-			logrus.Warnf("Timeout adding IP %s to firewall set %s (%s)", ip, setName, fwType)
+		case <-time.After(10 * time.Second):
+			m.log.Warnf("Timeout executing batch for set %s (%s) with %d unique items",
+				setName, fwType, itemCount)
 			if cmd.Process != nil {
 				cmd.Process.Kill()
 			}
 		}
-	}()
+	}
 }
