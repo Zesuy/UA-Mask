@@ -17,6 +17,7 @@ type firewallAddItem struct {
 	port    int
 	setName string
 	fwType  string
+	timeout int
 }
 
 // FirewallSetManager 负责管理队列和唯一的 worker
@@ -41,7 +42,7 @@ func NewFirewallSetManager(log *logrus.Logger, queueSize int) *FirewallSetManage
 	}
 }
 
-func (m *FirewallSetManager) Add(ip string, port int, setName, fwType string) {
+func (m *FirewallSetManager) Add(ip string, port int, setName, fwType string, timeout int) {
 	if ip == "" || setName == "" {
 		return
 	}
@@ -59,6 +60,7 @@ func (m *FirewallSetManager) Add(ip string, port int, setName, fwType string) {
 		port:    port,
 		setName: setName,
 		fwType:  fwType,
+		timeout: timeout,
 	}
 
 	select {
@@ -181,14 +183,17 @@ func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewa
 		var cmd *exec.Cmd
 
 		if fwType == "nft" {
-			// nft add element inet fw4 <setName> { <ip1> . <port1>, <ip2> . <port2>, ... }
+			// nft add element inet fw4 <setName> { <ip1> . <port1> timeout <t1>, <ip2> . <port2> timeout <t2>, ... }
 			args := []string{"add", "element", "inet", "fw4", setName, "{"}
-			for i, item := range items {
-				if i > 0 {
-					args[len(args)-1] = args[len(args)-1] + ","
+			var elements []string
+			for _, item := range items {
+				elementStr := fmt.Sprintf("%s . %d", item.ip, item.port)
+				if item.timeout > 0 {
+					elementStr += fmt.Sprintf(" timeout %ds", item.timeout)
 				}
-				args = append(args, item.ip, ".", fmt.Sprintf("%d", item.port))
+				elements = append(elements, elementStr)
 			}
+			args = append(args, strings.Join(elements, ", "))
 			args = append(args, "}")
 			cmd = exec.Command("nft", args...)
 
@@ -196,7 +201,11 @@ func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewa
 			cmd = exec.Command("ipset", "restore")
 			var stdin strings.Builder
 			for _, item := range items {
-				fmt.Fprintf(&stdin, "add %s %s,%d\n", setName, item.ip, item.port)
+				if item.timeout > 0 {
+					fmt.Fprintf(&stdin, "add %s %s,%d timeout %d\n", setName, item.ip, item.port, item.timeout)
+				} else {
+					fmt.Fprintf(&stdin, "add %s %s,%d\n", setName, item.ip, item.port)
+				}
 			}
 			cmd.Stdin = strings.NewReader(stdin.String())
 		}

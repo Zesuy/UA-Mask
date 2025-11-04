@@ -131,11 +131,7 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
 			}
 			if h.config.EnableFirewallUABypass {
-				h.fwManager.Add(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType)
-				if h.config.FirewallDropOnMatch {
-					logrus.Debugf("[%s] FirewallDropOnMatch enabled, dropping connection for protocol switch bypass.", destAddrPort)
-					return
-				}
+				h.fwManager.Add(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType, 600)
 			}
 			if _, err := io.Copy(dst, srcReader); err != nil && err != io.EOF {
 				logrus.Debugf("[%s] Fallback copy error: %v", destAddrPort, err)
@@ -193,7 +189,7 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				}
 				if isFirewallWhitelisted {
 					logrus.Debugf("[%s] Hit Firewall UA Whitelist: %s", destAddrPort, uaStr)
-					h.fwManager.Add(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType)
+					h.fwManager.Add(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType, 86400)
 					if h.config.FirewallDropOnMatch {
 						logrus.Debugf("[%s] FirewallDropOnMatch enabled, dropping connection for protocol switch bypass.", destAddrPort)
 						return
