@@ -17,7 +17,7 @@
 - [安装与编译](#安装与编译)
 - [附录：UCI 配置参考（/etc/config/UAmask）](#附录uci-配置参考etcconfiguAmask)
 - [关于更名与项目理念（摘要）](#关于更名与项目理念摘要)
-
+- [项目发展历史](#项目演进心路历程)
 ## 快速开始（5 分钟）
 
 1) 安装（任选其一）
@@ -405,3 +405,24 @@ config 'UAmask' 'main'
 - 目标：硬路由可用、软路由高吞吐；热路径优化、零拷贝、缓存与池化，兼顾稳定与性能。
 
 我们会持续打磨性能与易用性，让每台路由器都能一键获得更安全、稳定的 UA Mask 能力。
+
+## 项目演进心路历程
+
+1.  **此前方案**：最开始的方案是 `防火墙 -> OpenClash -> SOCKS5 -> UA3F`。这个方案虽然可行，但流量链路过长，导致 CPU 负载轻易达到瓶颈,直到后来萌生了自行实现的想法。
+    ![最初的思考](./img/before-think.png)
+    ![高昂的 CPU 占用](./img/before-bad.png)
+
+2.  **第一次优化**：为了解决性能问题，我们想到绕开 OpenClash，直接通过防火墙将流量转发给 UA-Mask（彼时还叫ua3f-tproxy）。这大大提升了处理效率。
+    ![性能优化的灵感](./img/after-spark-1.png)
+
+3.  **与 OpenClash 共存**：但新问题随之而来——如何与 OpenClash 共存？我们设计了新的方案：在 PREROUTING 链将流量先交给 UA-Mask，处理后再由 OUTPUT 链的 OpenClash 进行分流，并利用“绕过大陆”功能避免不必要的流量进入 Clash 核心。
+    ![关于共存的思考](./img/after-think-clash.png)
+    ![完美的共存方案](./img/after-spark-clash.png)
+
+4.  **引入 ipset/nfset 绕过**：我们发现，超过 90% 的流量（如 Steam 下载）并不需要修改 UA。因此，我们引入了 `ipset/nfset`，将这些高带宽流量动态加入绕过列表，使其直接通过内核转发，不再消耗 UA-Mask 的资源，实现了性能的飞跃。
+    ![发现高带宽流量的瓶颈](./img/ipset-think.png)
+    ![引入 set 绕过的灵感](./img/ipset-spark.png)
+    ![爱上纯内核转发的性能](./img/ipset-love.png)
+
+5.  **最终架构**：结合以上所有优化，形成了当前稳定、高效、兼容性强的最终架构。
+    ![最终的整体架构](./img/structure-all.png)

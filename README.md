@@ -6,7 +6,7 @@
 <!-- PROJECT LOGO -->
 <br />
 <p align="center">
-<img src="./img/screemshot_general.jpg" alt="UA-Mask LuCI 界面截图" width="700"></a>
+<img src="./docs/img/screemshot_general.jpg" alt="UA-Mask LuCI 界面截图" width="700"></a>
 
   <h3 align="center">UA-Mask</h3>
 
@@ -31,6 +31,13 @@
 *   **硬路由 (受限设备)**: 在 MIPS 等设备上稳定运行，优化热路径性能，消峰填谷保证稳定体验。
 *   **软路由 (高性能设备)**: 在 ARM/x86 等设备上实现高效、高吞吐。
 
+## 架构
+
+`UA-Mask` 极大地优化了流量处理路径，无需依赖 OpenClash 即可独立工作，也能与之完美配合实现分流。
+- 对steam这样的重流量，我们可以直接用ipset绕过，不再经过UA-Mask，只需要处理一些小流量的api请求。
+- 和openclash完美分流无需冗杂配置，只需要打开openclash的`代理本机`和`绕过大陆`
+![structure-all](./docs/img/structure-all.png)
+
 ## ✨ 特性
 
 *   **一键启用**: 自动配置 `nftables` 或 `iptables` 防火墙，开箱即用。
@@ -47,19 +54,9 @@
 > 1. 在“防火墙加速”中，勾选 `绕过非 HTTP 流量`。
 > 2. 将 `Steam` 添加至 `UA 白名单`。
 >
-> 此优化可让 `UA-Mask` 仅处理必要的 HTTP 流量，大幅提升处理效率。
+> 此优化可让 `UA-Mask` 仅处理必要的 HTTP 流量，大幅提升处理效率。但存在ua漏修改可能性
+>
 > 若希望保证steam流量完全不经过UA-Mask，请启用`匹配时断开连接`，这可能造成连接断开，请重试。
-> 注意：性能虽高，却有漏UA的风险，我们无法保证ip:port只发送https，若上级严格请勿使用！
-
-## 架构
-
-`UA-Mask` 极大地优化了流量处理路径，无需依赖 OpenClash 即可独立工作，也能与之完美配合实现分流。
-
-```mermaid
-graph LR
-    A[LAN 流量] --"防火墙转发"--> B{UA-Mask}
-    B --> C[互联网]
-```
 
 ## 安装
 
