@@ -75,7 +75,7 @@ func NewFirewallSetManager(log *logrus.Logger, queueSize int, cfg *Config) *Fire
 		nonHttpThreshold:       cfg.FirewallNonHttpThreshold,
 		httpCooldownPeriod:     cfg.FirewallHttpCooldownPeriod,
 		decisionDelay:          cfg.FirewallDecisionDelay,
-		profileCleanupInterval: 5 * time.Minute,
+		profileCleanupInterval: 10 * time.Minute,
 
 		// 从配置中获取防火墙信息
 		firewallIPSetName: cfg.FirewallIPSetName,
@@ -362,15 +362,14 @@ func (m *FirewallSetManager) handleNonHttpEvent(ip string, port int) {
 
 	// 检查是否达到阈值
 	if profile.nonHttpScore >= m.nonHttpThreshold {
-		// 如果已有计时器，则重置它
-		if profile.decisionTimer != nil {
-			profile.decisionTimer.Reset(m.decisionDelay)
-		} else {
-			// 否则，启动新的决策计时器
-			m.log.Infof("[Manager] Threshold reached for %s. Starting decision timer (%s).", key, m.decisionDelay)
-			profile.decisionTimer = time.AfterFunc(m.decisionDelay, func() {
-				m.finalizeDecision(ip, port)
-			})
+		if profile.nonHttpScore >= m.nonHttpThreshold {
+			//  如果已存在，就让它继续运行，不要重置。
+			if profile.decisionTimer == nil {
+				m.log.Infof("[Manager] Threshold reached for %s. Starting decision timer (%s).", key, m.decisionDelay)
+				profile.decisionTimer = time.AfterFunc(m.decisionDelay, func() {
+					m.finalizeDecision(ip, port)
+				})
+			}
 		}
 	}
 }
