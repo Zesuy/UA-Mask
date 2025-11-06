@@ -58,9 +58,8 @@ func (h *HTTPHandler) isHTTP(reader *bufio.Reader) (bool, error) {
 	buf, err := reader.Peek(7)
 	if err != nil {
 		if strings.Contains(err.Error(), "EOF") {
-			logrus.Debugf("Peek EOF: %s", err.Error())
 		} else {
-			logrus.Debugf("Peek error: %s", err.Error())
+			logrus.Debugf("[Handler] Peek error: %s", err.Error())
 		}
 		return false, err
 	}
@@ -96,45 +95,45 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 	dstWriter.Reset(dst)
 	defer func() {
 		if err := dstWriter.Flush(); err != nil {
-			logrus.Debugf("[%s] Final flush error on exit: %v", destAddrPort, err)
+			logrus.Debugf("[Handler] [%s] Final flush error on exit: %v", destAddrPort, err)
 		}
 		h.bufioWriterPool.Put(dstWriter)
 	}()
 
-	logrus.Debugf("[%s] connection established", destAddrPort)
+	logrus.Debugf("[Handler] [%s] connection established", destAddrPort)
 
 	for {
 		is_http, err := h.isHTTP(srcReader)
 		//检测失败
 		if err != nil {
 			if err == io.EOF || strings.Contains(err.Error(), "use of closed network connection") {
-				logrus.Debugf("[%s] Connection closed (EOF or closed in loop)", destAddrPort)
+				logrus.Debugf("[Handler] [%s] Connection closed (EOF or closed in loop)", destAddrPort)
 			} else {
-				logrus.Debugf("[%s] isHTTP check in loop error: %v", destAddrPort, err)
+				logrus.Debugf("[Handler] [%s] isHTTP check in loop error: %v", destAddrPort, err)
 			}
 
 			// 退出前尝试刷新剩余数据
 			if err_flush := dstWriter.Flush(); err_flush != nil {
-				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
+				logrus.Debugf("[Handler] [%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
 			}
 			// 回退到io.copy
 			if _, err := io.Copy(dst, srcReader); err != nil && err != io.EOF {
-				logrus.Debugf("[%s] Fallback copy error: %v", destAddrPort, err)
+				logrus.Debugf("[Handler] [%s] Fallback copy error: %v", destAddrPort, err)
 			}
 			return
 		}
 
 		if !is_http {
-			logrus.Debugf("[%s] non-HTTP traffic detected", destAddrPort)
+			logrus.Debugf("[Handler] [%s] non-HTTP traffic detected", destAddrPort)
 			// 刷新已缓冲的数据
 			if err_flush := dstWriter.Flush(); err_flush != nil {
-				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
+				logrus.Debugf("[Handler] [%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
 			}
 			if h.config.EnableFirewallUABypass {
 				h.fwManager.ReportNonHttpEvent(destIP, destPort)
 			}
 			if _, err := io.Copy(dst, srcReader); err != nil && err != io.EOF {
-				logrus.Debugf("[%s] Fallback copy error: %v", destAddrPort, err)
+				logrus.Debugf("[Handler] [%s] Fallback copy error: %v", destAddrPort, err)
 			}
 			return
 		}
@@ -143,11 +142,11 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 		request, err := http.ReadRequest(srcReader)
 		if err != nil {
 			if err == io.EOF || strings.Contains(err.Error(), "use of closed network connection") {
-				logrus.Debugf("[%s] Connection closed (EOF or closed)", destAddrPort)
+				logrus.Debugf("[Handler] [%s] Connection closed (EOF or closed)", destAddrPort)
 			} else if strings.Contains(err.Error(), "connection reset by peer") {
-				logrus.Debugf("[%s] Connection reset", destAddrPort)
+				logrus.Debugf("[Handler] [%s] Connection reset", destAddrPort)
 			} else {
-				logrus.Debugf("[%s] HTTP read request error: %v", destAddrPort, err)
+				logrus.Debugf("[Handler] [%s] HTTP read request error: %v", destAddrPort, err)
 			}
 			return // 结束此连接的处理
 		}
@@ -162,7 +161,7 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 		uaFound := uaStr != ""
 
 		if !uaFound {
-			logrus.Debugf("[%s] No User-Agent header, skip modification.", destAddrPort)
+			logrus.Debugf("[Handler] [%s] No User-Agent header, skip modification.", destAddrPort)
 		} else {
 			if finalUA, ok := h.cache.Get(uaStr); ok {
 				// UA 缓存
@@ -170,10 +169,10 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				if finalUA != uaStr {
 					h.stats.IncCacheHits()
 					h.stats.IncModifiedRequests()
-					logrus.Debugf("[%s] UA modified (cached): %s -> %s", destAddrPort, uaStr, finalUA)
+					logrus.Debugf("[Handler] [%s] UA modified (cached): %s -> %s", destAddrPort, uaStr, finalUA)
 				} else {
 					h.stats.IncCacheHitNoModify()
-					logrus.Debugf("[%s] UA not modified (cached): %s", destAddrPort, uaStr)
+					logrus.Debugf("[Handler] [%s] UA not modified (cached): %s", destAddrPort, uaStr)
 				}
 			} else {
 				// 未命中缓存
@@ -191,10 +190,10 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 					}
 				}
 				if isFirewallWhitelisted {
-					logrus.Debugf("[%s] Hit Firewall UA Whitelist: %s", destAddrPort, uaStr)
+					logrus.Debugf("[Handler] [%s] Hit Firewall UA Whitelist: %s", destAddrPort, uaStr)
 					h.fwManager.Add(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType, 86400)
 					if h.config.FirewallDropOnMatch {
-						logrus.Debugf("[%s] FirewallDropOnMatch enabled, dropping connection for protocol switch bypass.", destAddrPort)
+						logrus.Debugf("[Handler] [%s] FirewallDropOnMatch enabled, dropping connection for protocol switch bypass.", destAddrPort)
 						return
 					}
 					shouldReplace = false
@@ -243,12 +242,12 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				}
 				// 3. 处理日志和缓存
 				if !shouldReplace {
-					logrus.Debugf("[%s] %s: %s. ", destAddrPort, matchReason, uaStr)
+					logrus.Debugf("[Handler] [%s] %s: %s. ", destAddrPort, matchReason, uaStr)
 					if !isFirewallWhitelisted {
 						h.cache.Add(uaStr, uaStr) // 缓存不修改的UA
 					}
 				} else {
-					logrus.Debugf("[%s] %s: %s", destAddrPort, matchReason, uaStr)
+					logrus.Debugf("[Handler] [%s] %s: %s", destAddrPort, matchReason, uaStr)
 				}
 
 				// 根据 shouldReplace 标志执行操作
@@ -263,12 +262,12 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 					}
 
 					if h.config.ForceReplace {
-						logrus.Debugf("[%s] UA modified (forced): %s -> %s", destAddrPort, uaStr, finalUA)
+						logrus.Debugf("[Handler] [%s] UA modified (forced): %s -> %s", destAddrPort, uaStr, finalUA)
 					} else {
 						if h.config.EnablePartialReplace && finalUA != h.config.UserAgent {
-							logrus.Debugf("[%s] UA partially modified: %s -> %s", destAddrPort, uaStr, finalUA)
+							logrus.Debugf("[Handler] [%s] UA partially modified: %s -> %s", destAddrPort, uaStr, finalUA)
 						} else {
-							logrus.Debugf("[%s] UA fully modified: %s -> %s", destAddrPort, uaStr, finalUA)
+							logrus.Debugf("[Handler] [%s] UA fully modified: %s -> %s", destAddrPort, uaStr, finalUA)
 						}
 					}
 				}
@@ -277,13 +276,13 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 
 		// 6. 写回目标
 		if err := request.Write(dstWriter); err != nil {
-			logrus.Debugf("[%s] HTTP write request error: %v", destAddrPort, err)
+			logrus.Debugf("[Handler] [%s] HTTP write request error: %v", destAddrPort, err)
 			request.Body.Close()
 			return
 		}
 		// 7. 刷新缓冲区，确保请求头立即发送
 		if err := dstWriter.Flush(); err != nil {
-			logrus.Debugf("[%s] Flush error after writing request: %v", destAddrPort, err)
+			logrus.Debugf("[Handler] [%s] Flush error after writing request: %v", destAddrPort, err)
 			request.Body.Close()
 			return
 		}
@@ -291,6 +290,6 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 		// 8. 关闭 Body，准备读取下一个 Keep-Alive 请求
 		request.Body.Close()
 		bodySize := request.ContentLength
-		logrus.Debugf("[%s] Request processed, body size: %d. Waiting for next request...", destAddrPort, bodySize)
+		logrus.Debugf("[Handler] [%s] Request processed, body size: %d. Waiting for next request...", destAddrPort, bodySize)
 	}
 }

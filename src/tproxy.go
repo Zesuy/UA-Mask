@@ -46,7 +46,7 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 
 	ip := net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
 	port := int(addr.Port>>8 | addr.Port<<8)
-	logrus.Debugf("getOriginalDst raw value: %d, parsed port: %d", addr.Port, port)
+	logrus.Debugf("[Tproxy] getOriginalDst raw value: %d, parsed port: %d", addr.Port, port)
 	return &net.TCPAddr{
 		IP:   ip,
 		Port: port,

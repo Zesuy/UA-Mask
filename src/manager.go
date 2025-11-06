@@ -73,14 +73,14 @@ func NewFirewallSetManager(log *logrus.Logger, queueSize int, cfg *Config) *Fire
 
 		// default config
 		nonHttpThreshold:       5,
-		httpCooldownPeriod:     5 * time.Minute,
-		decisionDelay:          30 * time.Second,
-		profileCleanupInterval: 15 * time.Minute,
+		httpCooldownPeriod:     10 * time.Minute,
+		decisionDelay:          60 * time.Second,
+		profileCleanupInterval: 5 * time.Minute,
 
 		// 从配置中获取防火墙信息
 		firewallIPSetName: cfg.FirewallIPSetName,
 		firewallType:      cfg.FirewallType,
-		defaultTimeout:    600,
+		defaultTimeout:    6000,
 
 		maxBatchSize: 200,
 		maxBatchWait: 100 * time.Millisecond,
@@ -92,7 +92,7 @@ func (m *FirewallSetManager) ReportHttpEvent(ip string, port int) {
 	select {
 	case m.httpEventChan <- reportEvent{ip: ip, port: port}:
 	default:
-		m.log.Warnf("HTTP event channel full, dropping event for %s:%d", ip, port)
+		m.log.Warnf("[Manager] HTTP event channel full, dropping event for %s:%d", ip, port)
 	}
 }
 
@@ -101,7 +101,7 @@ func (m *FirewallSetManager) ReportNonHttpEvent(ip string, port int) {
 	select {
 	case m.nonHttpEventChan <- reportEvent{ip: ip, port: port}:
 	default:
-		m.log.Warnf("Non-HTTP event channel full, dropping event for %s:%d", ip, port)
+		m.log.Warnf("[Manager] Non-HTTP event channel full, dropping event for %s:%d", ip, port)
 	}
 }
 
@@ -110,11 +110,11 @@ func (m *FirewallSetManager) Add(ip string, port int, setName, fwType string, ti
 		return
 	}
 	if net.ParseIP(ip) == nil {
-		m.log.Warnf("Invalid IP address: %s", ip)
+		m.log.Warnf("[Manager] Invalid IP address: %s", ip)
 		return
 	}
 	if !regexp.MustCompile(`^[a-zA-Z0-9_]+$`).MatchString(setName) {
-		m.log.Warnf("Invalid set name: %s", setName)
+		m.log.Warnf("[Manager] Invalid set name: %s", setName)
 		return
 	}
 
@@ -130,7 +130,7 @@ func (m *FirewallSetManager) Add(ip string, port int, setName, fwType string, ti
 	case m.queue <- item:
 		// 成功
 	case <-time.After(50 * time.Millisecond):
-		m.log.Warnf("Firewall add queue is full. Dropping item for %s", ip)
+		m.log.Warnf("[Manager] Firewall add queue is full. Dropping item for %s", ip)
 	}
 }
 
@@ -138,15 +138,15 @@ func (m *FirewallSetManager) Add(ip string, port int, setName, fwType string, ti
 func (m *FirewallSetManager) Start() {
 	m.wg.Add(1)
 	go m.worker()
-	m.log.Info("FirewallSetManager worker started")
+	m.log.Info("[Manager] FirewallSetManager worker started")
 }
 
 // Stop worker
 func (m *FirewallSetManager) Stop() {
-	m.log.Info("Stopping FirewallSetManager worker...")
+	m.log.Info("[Manager] Stopping FirewallSetManager worker...")
 	close(m.stopChan)
 	m.wg.Wait() // 等待 worker 完成
-	m.log.Info("FirewallSetManager worker stopped")
+	m.log.Info("[Manager] FirewallSetManager worker stopped")
 }
 
 func (m *FirewallSetManager) batchKey(item firewallAddItem) string {
@@ -227,7 +227,7 @@ func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewa
 		return
 	}
 
-	m.log.Debugf("Executing %d batches...", len(batches))
+	m.log.Debugf("[Manager] Executing %d batches...", len(batches))
 
 	for key, itemsMap := range batches {
 		if len(itemsMap) == 0 {
@@ -278,7 +278,7 @@ func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewa
 			cmd.Stdin = strings.NewReader(stdin.String())
 		}
 
-		m.log.Debugf("Executing [batch %s]: %s", key, cmd.String())
+		m.log.Debugf("[Manager] Executing [batch %s]: %s", key, cmd.String())
 
 		errChan := make(chan error, 1)
 		go func() {
@@ -292,14 +292,14 @@ func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewa
 		select {
 		case err := <-errChan:
 			if err != nil {
-				m.log.Warnf("Failed to execute batch for set %s (%s): %v",
+				m.log.Warnf("[Manager] Failed to execute batch for set %s (%s): %v",
 					setName, fwType, err)
 			} else {
-				m.log.Debugf("Successfully added %d unique IPs to firewall set %s (%s)",
+				m.log.Debugf("[Manager] Successfully added %d unique IPs to firewall set %s (%s)",
 					itemCount, setName, fwType)
 			}
 		case <-time.After(10 * time.Second):
-			m.log.Warnf("Timeout executing batch for set %s (%s) with %d unique items",
+			m.log.Warnf("[Manager] Timeout executing batch for set %s (%s) with %d unique items",
 				setName, fwType, itemCount)
 			if cmd.Process != nil {
 				cmd.Process.Kill()
@@ -324,7 +324,7 @@ func (m *FirewallSetManager) handleHttpEvent(ip string, port int) {
 		return
 	}
 
-	m.log.Debugf("HTTP event for %s, resetting score and setting cooldown.", key)
+	m.log.Debugf("[Manager] HTTP event for %s, resetting score and setting cooldown.", key)
 	// 重置非HTTP分数，设置新的豁免期
 	profile.nonHttpScore = 0
 	profile.httpLockExpires = time.Now().Add(m.httpCooldownPeriod)
@@ -334,7 +334,7 @@ func (m *FirewallSetManager) handleHttpEvent(ip string, port int) {
 	if profile.decisionTimer != nil {
 		profile.decisionTimer.Stop()
 		profile.decisionTimer = nil
-		m.log.Infof("Cancelled firewall add for %s due to new HTTP activity.", key)
+		m.log.Infof("[Manager] Cancelled firewall add for %s due to new HTTP activity.", key)
 	}
 }
 
@@ -351,22 +351,27 @@ func (m *FirewallSetManager) handleNonHttpEvent(ip string, port int) {
 
 	// 在HTTP豁免期内，忽略此次非HTTP报告
 	if time.Now().Before(profile.httpLockExpires) {
-		m.log.Debugf("Ignored non-HTTP event for %s during HTTP cooldown.", key)
+		m.log.Debugf("[Manager] Ignored non-HTTP event for %s during HTTP cooldown.", key)
 		return
 	}
 
 	// 累积非HTTP分数
 	profile.nonHttpScore++
 	profile.lastEvent = time.Now()
-	m.log.Debugf("Non-HTTP event for %s, score is now %d.", key, profile.nonHttpScore)
+	m.log.Debugf("[Manager] Non-HTTP event for %s, score is now %d.", key, profile.nonHttpScore)
 
-	// 检查是否达到阈值，并且当前没有正在等待的决策计时器
-	if profile.nonHttpScore >= m.nonHttpThreshold && profile.decisionTimer == nil {
-		m.log.Infof("Threshold reached for %s. Starting decision timer (%s).", key, m.decisionDelay)
-		// 启动延迟决策计时器
-		profile.decisionTimer = time.AfterFunc(m.decisionDelay, func() {
-			m.finalizeDecision(ip, port)
-		})
+	// 检查是否达到阈值
+	if profile.nonHttpScore >= m.nonHttpThreshold {
+		// 如果已有计时器，则重置它
+		if profile.decisionTimer != nil {
+			profile.decisionTimer.Reset(m.decisionDelay)
+		} else {
+			// 否则，启动新的决策计时器
+			m.log.Infof("[Manager] Threshold reached for %s. Starting decision timer (%s).", key, m.decisionDelay)
+			profile.decisionTimer = time.AfterFunc(m.decisionDelay, func() {
+				m.finalizeDecision(ip, port)
+			})
+		}
 	}
 }
 
@@ -379,14 +384,14 @@ func (m *FirewallSetManager) finalizeDecision(ip string, port int) {
 
 	// 再次检查条件，如果在延迟期间收到了HTTP事件，profile可能已被修改或删除
 	if !ok || profile.nonHttpScore < m.nonHttpThreshold || time.Now().Before(profile.httpLockExpires) {
-		m.log.Infof("Final decision for %s aborted (conditions no longer met).", key)
+		m.log.Infof("[Manager] Final decision for %s aborted (conditions no longer met).", key)
 		if ok {
 			profile.decisionTimer = nil
 		}
 		return
 	}
 
-	m.log.Infof("Decision final for %s. Adding to firewall.", key)
+	m.log.Infof("[Manager] Decision final for %s. Adding to firewall.", key)
 	m.Add(ip, port, m.firewallIPSetName, m.firewallType, m.defaultTimeout)
 
 	// 从画像中删除，防止重复添加
@@ -397,7 +402,7 @@ func (m *FirewallSetManager) cleanupProfiles() {
 	m.profileLock.Lock()
 	defer m.profileLock.Unlock()
 
-	m.log.Debug("Running port profile cleanup...")
+	m.log.Debug("[Manager] Running port profile cleanup...")
 	now := time.Now()
 	cleanedCount := 0
 	for key, profile := range m.portProfiles {
@@ -408,6 +413,6 @@ func (m *FirewallSetManager) cleanupProfiles() {
 		}
 	}
 	if cleanedCount > 0 {
-		m.log.Debugf("Cleaned up %d stale port profiles.", cleanedCount)
+		m.log.Debugf("[Manager] Cleaned up %d stale port profiles.", cleanedCount)
 	}
 }

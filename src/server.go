@@ -38,10 +38,10 @@ func (s *Server) Run() error {
 		for i := 0; i < s.config.PoolSize; i++ {
 			go func(workerID int) {
 				for conn := range connChan {
-					logrus.Debugf("Worker %d processing connection from %s", workerID, conn.RemoteAddr())
+					logrus.Debugf("[server] Worker %d processing connection from %s", workerID, conn.RemoteAddr())
 					s.handleConnection(conn)
 				}
-				logrus.Debugf("Worker %d stopping", workerID)
+				logrus.Debugf("[server] Worker %d stopping", workerID)
 			}(i)
 		}
 
@@ -81,14 +81,14 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 
 	originalDst, err := getOriginalDst(clientConn)
 	if err != nil {
-		logrus.Debugf("Failed to get original destination: %v", err)
+		logrus.Debugf("[server] Failed to get original destination: %v", err)
 		return
 	}
 
 	destAddrPort := originalDst.String()
 	clientAddr := clientConn.RemoteAddr()
 
-	logrus.Debugf("Connection: %s -> %s (original: %s)",
+	logrus.Debugf("[server] Connection: %s -> %s (original: %s)",
 		clientAddr.String(),
 		clientConn.LocalAddr().String(),
 		destAddrPort)
@@ -104,7 +104,7 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 	}
 
 	if err != nil {
-		logrus.Debugf("Failed to connect to %s: %v", destAddrPort, err)
+		logrus.Debugf("[server] Failed to connect to %s: %v", destAddrPort, err)
 		return
 	}
 	defer serverConn.Close()
