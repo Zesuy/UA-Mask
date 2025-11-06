@@ -351,6 +351,7 @@ start_service() {
     config_get firewall_ua_whitelist "main" "Firewall_ua_whitelist" ""
     config_get_bool firewall_ua_bypass "main" "Firewall_ua_bypass" "0"
     config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
+    config_get_bool firewall_advanced_settings "main" "firewall_advanced_settings" "0"
 
     mkdir -p "$(dirname "$log_file")"
 
@@ -390,6 +391,26 @@ start_service() {
         
         if [ "$firewall_ua_bypass" = "1" ]; then
             procd_append_param command -fw-bypass
+        fi
+        if [ "$firewall_advanced_settings" = "1" ]; then
+            config_get firewall_nonhttp_threshold "main" "firewall_nonhttp_threshold" "5"
+            config_get firewall_timeout "main" "firewall_timeout" "28800"
+            config_get firewall_decision_delay "main" "firewall_decision_delay" "60"
+
+            # 参数检验
+            if [ "$firewall_nonhttp_threshold" -lt 1 ]; then
+                firewall_nonhttp_threshold=5
+            fi
+            if [ "$firewall_timeout" -lt 60 ]; then
+                firewall_timeout=28800
+            fi
+            if [ "$firewall_decision_delay" -lt 10 ]; then
+                firewall_decision_delay=60
+            fi 
+
+            procd_append_param command -fw-nonhttp-threshold "$firewall_nonhttp_threshold"
+            procd_append_param command -fw-timeout "$firewall_timeout"
+            procd_append_param command -fw-decision-delay "${firewall_decision_delay}s"
         fi
     else
          logger -t "$NAME" "Firewall set feature disabled. Skipping firewall flags."

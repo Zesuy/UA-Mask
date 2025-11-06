@@ -5,55 +5,64 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
 // Config 结构体保存所有应用配置
 type Config struct {
-	UserAgent              string
-	Port                   int
-	LogLevel               string
-	ShowVer                bool
-	LogFile                string
-	Whitelist              []string
-	ForceReplace           bool
-	EnableRegex            bool
-	EnablePartialReplace   bool
-	KeywordsList           []string
-	UAPattern              string
-	UARegexp               *regexp.Regexp
-	CacheSize              int
-	BufferSize             int
-	PoolSize               int
-	FirewallUAWhitelist    []string // 防火墙 UA 白名单
-	EnableFirewallUABypass bool     // 启用防火墙非 HTTP 绕过
-	FirewallIPSetName      string   // 防火墙 set 名称
-	FirewallType           string   // 防火墙类型 (ipt or nft)
-	FirewallDropOnMatch    bool     // 防火墙匹配时断开连接
+	UserAgent                  string
+	Port                       int
+	LogLevel                   string
+	ShowVer                    bool
+	LogFile                    string
+	Whitelist                  []string
+	ForceReplace               bool
+	EnableRegex                bool
+	EnablePartialReplace       bool
+	KeywordsList               []string
+	UAPattern                  string
+	UARegexp                   *regexp.Regexp
+	CacheSize                  int
+	BufferSize                 int
+	PoolSize                   int
+	FirewallUAWhitelist        []string      // 防火墙 UA 白名单
+	EnableFirewallUABypass     bool          // 启用防火墙非 HTTP 绕过
+	FirewallIPSetName          string        // 防火墙 set 名称
+	FirewallType               string        // 防火墙类型 (ipt or nft)
+	FirewallDropOnMatch        bool          // 防火墙匹配时断开连接
+	FirewallNonHttpThreshold   int           // 防火墙非 HTTP 判定阈值
+	FirewallTimeout            int           // 防火墙规则超时时间 (秒)
+	FirewallDecisionDelay      time.Duration // 防火墙决策延迟时间
+	FirewallHttpCooldownPeriod time.Duration // 防火墙 HTTP 冷却时间
 }
 
 func NewConfig() (*Config, error) {
 	var (
-		userAgent              string
-		port                   int
-		logLevel               string
-		showVer                bool
-		forceReplace           bool
-		enablePartialReplace   bool
-		uaPattern              string
-		logFile                string
-		whitelistArg           string
-		keywords               string
-		enableRegex            bool
-		cacheSize              int
-		bufferSize             int
-		poolSize               int
-		firewallUAWhitelistArg string
-		enableFirewallUABypass bool
-		firewallIPSetName      string
-		firewallType           string
-		firewallDropOnMatch    bool
+		userAgent                  string
+		port                       int
+		logLevel                   string
+		showVer                    bool
+		forceReplace               bool
+		enablePartialReplace       bool
+		uaPattern                  string
+		logFile                    string
+		whitelistArg               string
+		keywords                   string
+		enableRegex                bool
+		cacheSize                  int
+		bufferSize                 int
+		poolSize                   int
+		firewallUAWhitelistArg     string
+		enableFirewallUABypass     bool
+		firewallIPSetName          string
+		firewallType               string
+		firewallDropOnMatch        bool
+		firewallNonHttpThreshold   int
+		firewallTimeout            int
+		firewallDecisionDelay      time.Duration
+		firewallHttpCooldownPeriod time.Duration
 	)
 
 	// 2. 注册 flag
@@ -83,6 +92,11 @@ func NewConfig() (*Config, error) {
 	flag.StringVar(&firewallType, "fw-type", "ipt", "Firewall type (ipt or nft)")
 	flag.BoolVar(&firewallDropOnMatch, "fw-drop", false, "Drop connections that match firewall rules")
 
+	flag.IntVar(&firewallNonHttpThreshold, "fw-nonhttp-threshold", 5, "Firewall non-HTTP traffic threshold")
+	flag.IntVar(&firewallTimeout, "fw-timeout", 8*3600, "Firewall rule timeout in seconds")
+	flag.DurationVar(&firewallDecisionDelay, "fw-decision-delay", 60*time.Second, "Firewall decision delay duration")
+	flag.DurationVar(&firewallHttpCooldownPeriod, "fw-http-cooldown", 1*time.Hour, "Firewall HTTP cooldown period")
+
 	// 3. 解析 flag
 	flag.Parse()
 
@@ -102,11 +116,15 @@ func NewConfig() (*Config, error) {
 		Whitelist:            []string{},
 		KeywordsList:         []string{},
 
-		FirewallUAWhitelist:    []string{},
-		EnableFirewallUABypass: enableFirewallUABypass,
-		FirewallIPSetName:      firewallIPSetName,
-		FirewallType:           firewallType,
-		FirewallDropOnMatch:    firewallDropOnMatch,
+		FirewallUAWhitelist:        []string{},
+		EnableFirewallUABypass:     enableFirewallUABypass,
+		FirewallIPSetName:          firewallIPSetName,
+		FirewallType:               firewallType,
+		FirewallDropOnMatch:        firewallDropOnMatch,
+		FirewallNonHttpThreshold:   firewallNonHttpThreshold,
+		FirewallTimeout:            firewallTimeout,
+		FirewallDecisionDelay:      firewallDecisionDelay,
+		FirewallHttpCooldownPeriod: firewallHttpCooldownPeriod,
 	}
 
 	// 处理白名单
@@ -181,6 +199,10 @@ func (c *Config) LogConfig(version string) {
 	logrus.Infof("Firewall UA Whitelist: %v", c.FirewallUAWhitelist)
 	logrus.Infof("Enable Firewall Non-HTTP Bypass: %v", c.EnableFirewallUABypass)
 	logrus.Infof("Firewall Drop On Match: %v", c.FirewallDropOnMatch)
+	logrus.Infof("Firewall Non-HTTP Threshold: %d", c.FirewallNonHttpThreshold)
+	logrus.Infof("Firewall Rule Timeout (seconds): %d", c.FirewallTimeout)
+	logrus.Infof("Firewall Decision Delay: %s", c.FirewallDecisionDelay)
+	logrus.Infof("Firewall HTTP Cooldown Period: %s", c.FirewallHttpCooldownPeriod)
 
 	if c.ForceReplace {
 		logrus.Info("Mode: Force Replace (All)")

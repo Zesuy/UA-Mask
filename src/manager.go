@@ -72,15 +72,15 @@ func NewFirewallSetManager(log *logrus.Logger, queueSize int, cfg *Config) *Fire
 		portProfiles:     make(map[string]*portProfile),
 
 		// default config
-		nonHttpThreshold:       5,
-		httpCooldownPeriod:     10 * time.Minute,
-		decisionDelay:          60 * time.Second,
+		nonHttpThreshold:       cfg.FirewallNonHttpThreshold,
+		httpCooldownPeriod:     cfg.FirewallHttpCooldownPeriod,
+		decisionDelay:          cfg.FirewallDecisionDelay,
 		profileCleanupInterval: 5 * time.Minute,
 
 		// 从配置中获取防火墙信息
 		firewallIPSetName: cfg.FirewallIPSetName,
 		firewallType:      cfg.FirewallType,
-		defaultTimeout:    6000,
+		defaultTimeout:    cfg.FirewallTimeout,
 
 		maxBatchSize: 200,
 		maxBatchWait: 100 * time.Millisecond,

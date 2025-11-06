@@ -98,6 +98,7 @@ end
 
 main:tab("general", "常规设置")
 main:tab("network", "网络与防火墙")
+main:tab("advanced", "高级设置")
 main:tab("softlog", "应用日志")
 
 -- === Tab 1: 常规设置（UA 相关）===
@@ -186,13 +187,13 @@ iface = main:taboption("network", Value, "iface", "监听接口")
 iface.default = "br-lan"
 iface.description = "指定监听的 LAN 口。"
 
-enable_firewall_set = main:taboption("network", Flag, "enable_firewall_set", "启用防火墙加速（实验性）")
+enable_firewall_set = main:taboption("network", Flag, "enable_firewall_set", "启用防火墙加速")
 enable_firewall_set.default = 0
-enable_firewall_set.description = "<b>[实验性功能]</b> 启用后，将创建一个 ipset（fw3）或 nfset（fw4），用于动态绕过特定目标 IP 和端口的组合，不会再进入 UAmask 处理，这将大幅提升性能，但可能造成部分 UA 未被修改。<br>如果您使用 iptables，请确保安装 ipset 软件包。"
+enable_firewall_set.description = "启用后，将创建一个 ipset（fw3）或 nfset（fw4），用于动态绕过特定目标 IP 和端口的组合，不会再进入 UAmask 处理，这将大幅提升性能。<br>如果您使用 iptables，请确保安装 ipset 软件包。"
 
 Firewall_ua_bypass=main:taboption("network", Flag, "Firewall_ua_bypass", "绕过非http流量")
 Firewall_ua_bypass:depends("enable_firewall_set", "1")
-Firewall_ua_bypass.description = "启用后，将绕过使用非 HTTP 流量的 IP 和端口，10 分钟内不再通过 UAmask 代理。"
+Firewall_ua_bypass.description = "启用后，绕过使用非 HTTP 流量的 IP 和端口，使用了决策器以避免泄露。"
 
 Firewall_ua_whitelist= main:taboption("network", Value, "Firewall_ua_whitelist", "UA 关键词白名单")
 Firewall_ua_whitelist:depends("enable_firewall_set", "1")
@@ -220,8 +221,30 @@ bypass_ips = main:taboption("network", Value, "bypass_ips", "绕过目标 IP")
 bypass_ips.default = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
 bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 
+-- === Tab 3: 高级设置（防火墙高级设置）===
+firewall_advanced_settings = main:taboption("advanced", Flag, "firewall_advanced_settings", "决策器设置")
+firewall_advanced_settings.description = "启用后，您可以自定义防火墙绕过中对非http决策器的参数"
+
+firewall_nonhttp_threshold = main:taboption("advanced", Value, "firewall_nonhttp_threshold", "非 HTTP 判定阈值")
+firewall_nonhttp_threshold:depends("firewall_advanced_settings", "1")
+firewall_nonhttp_threshold.datatype = "uinteger"
+firewall_nonhttp_threshold.default = 5
+firewall_nonhttp_threshold.description = "在将一个 IP+端口 确认为非 HTTP 流量之前，需要连续检测到的非 HTTP 连接次数。"
+
+firewall_decision_delay = main:taboption("advanced", Value, "firewall_decision_delay", "决策延迟时间（秒）")
+firewall_decision_delay:depends("firewall_advanced_settings", "1")
+firewall_decision_delay.datatype = "uinteger"
+firewall_decision_delay.default = 60
+firewall_decision_delay.description = "达到验证阈值后，观察多久才做出绕过决策。单位为秒。"
+
+firewall_timeout = main:taboption("advanced", Value, "firewall_timeout", "防火墙规则超时（秒）")
+firewall_timeout:depends("firewall_advanced_settings", "1")
+firewall_timeout.datatype = "uinteger"
+firewall_timeout.default = 28800
+firewall_timeout.description = "添加到 ipset/nfset 中的规则的超时时间。单位为秒（默认8*3600）。"
 
 
+-- === Tab 4: 应用日志 ===
 
 
 log_level = main:taboption("softlog", ListValue, "log_level", "日志等级")
