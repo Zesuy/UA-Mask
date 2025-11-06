@@ -405,8 +405,16 @@ func (m *FirewallSetManager) cleanupProfiles() {
 	now := time.Now()
 	cleanedCount := 0
 	for key, profile := range m.portProfiles {
-		// 清理那些长时间不活跃，且未进入决策流程的条目
-		if profile.decisionTimer == nil && now.Sub(profile.lastEvent) > m.profileCleanupInterval {
+		// 如果正在进入决策流程，跳过
+		if profile.decisionTimer != nil {
+			continue
+		}
+		// 如果还在 HTTP 豁免期内，不要删除（保留锁）
+		if !profile.httpLockExpires.IsZero() && now.Before(profile.httpLockExpires) {
+			continue
+		}
+		// 清理那些长时间不活跃的条目
+		if now.Sub(profile.lastEvent) > m.profileCleanupInterval {
 			delete(m.portProfiles, key)
 			cleanedCount++
 		}
