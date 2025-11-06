@@ -101,7 +101,7 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 		h.bufioWriterPool.Put(dstWriter)
 	}()
 
-	logrus.Debugf("[%s] HTTP detected, processing with go prase", destAddrPort)
+	logrus.Debugf("[%s] connection established", destAddrPort)
 
 	for {
 		is_http, err := h.isHTTP(srcReader)
@@ -125,13 +125,13 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 		}
 
 		if !is_http {
-			logrus.Debugf("[%s] Protocol switch detected. Changing to direct relay mode.", destAddrPort)
+			logrus.Debugf("[%s] non-HTTP traffic detected", destAddrPort)
 			// 刷新已缓冲的数据
 			if err_flush := dstWriter.Flush(); err_flush != nil {
 				logrus.Debugf("[%s] Flush error before fallback (isHTTP err): %v", destAddrPort, err_flush)
 			}
 			if h.config.EnableFirewallUABypass {
-				h.fwManager.Add(destIP, destPort, h.config.FirewallIPSetName, h.config.FirewallType, 600)
+				h.fwManager.ReportNonHttpEvent(destIP, destPort)
 			}
 			if _, err := io.Copy(dst, srcReader); err != nil && err != io.EOF {
 				logrus.Debugf("[%s] Fallback copy error: %v", destAddrPort, err)
@@ -150,6 +150,9 @@ func (h *HTTPHandler) ModifyAndForward(dst net.Conn, src net.Conn, destAddrPort 
 				logrus.Debugf("[%s] HTTP read request error: %v", destAddrPort, err)
 			}
 			return // 结束此连接的处理
+		}
+		if h.config.EnableFirewallUABypass {
+			h.fwManager.ReportHttpEvent(destIP, destPort)
 		}
 
 		h.stats.IncHttpRequests()

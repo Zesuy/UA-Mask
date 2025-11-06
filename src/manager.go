@@ -20,6 +20,18 @@ type firewallAddItem struct {
 	timeout int
 }
 
+type portProfile struct {
+	nonHttpScore    int         // 非 HTTP 事件计分
+	httpLockExpires time.Time   // HTTP 豁免期截止时间
+	lastEvent       time.Time   // 最近一次事件时间
+	decisionTimer   *time.Timer // 延迟决策计时器
+}
+
+type reportEvent struct {
+	ip   string
+	port int
+}
+
 // FirewallSetManager 负责管理队列和唯一的 worker
 type FirewallSetManager struct {
 	queue    chan firewallAddItem
@@ -27,18 +39,69 @@ type FirewallSetManager struct {
 	wg       sync.WaitGroup
 	log      *logrus.Logger
 
+	// 端口画像
+	nonHttpEventChan chan reportEvent
+	httpEventChan    chan reportEvent
+	portProfiles     map[string]*portProfile
+	profileLock      sync.Mutex
+
+	// 画像配置
+	nonHttpThreshold       int           // 判定为非HTTP的连接数阈值
+	httpCooldownPeriod     time.Duration // HTTP事件后的豁免期
+	decisionDelay          time.Duration // 满足条件后的决策延迟
+	profileCleanupInterval time.Duration // 清理陈旧画像的周期
+
+	// 防火墙配置
+	firewallIPSetName string
+	firewallType      string
+	defaultTimeout    int
+
 	maxBatchSize int
 	maxBatchWait time.Duration
 }
 
-func NewFirewallSetManager(log *logrus.Logger, queueSize int) *FirewallSetManager {
+func NewFirewallSetManager(log *logrus.Logger, queueSize int, cfg *Config) *FirewallSetManager {
 	return &FirewallSetManager{
 		queue:    make(chan firewallAddItem, queueSize),
 		stopChan: make(chan struct{}),
 		log:      log,
 
+		// init
+		nonHttpEventChan: make(chan reportEvent, queueSize),
+		httpEventChan:    make(chan reportEvent, queueSize),
+		portProfiles:     make(map[string]*portProfile),
+
+		// default config
+		nonHttpThreshold:       5,
+		httpCooldownPeriod:     5 * time.Minute,
+		decisionDelay:          30 * time.Second,
+		profileCleanupInterval: 15 * time.Minute,
+
+		// 从配置中获取防火墙信息
+		firewallIPSetName: cfg.FirewallIPSetName,
+		firewallType:      cfg.FirewallType,
+		defaultTimeout:    600,
+
 		maxBatchSize: 200,
 		maxBatchWait: 100 * time.Millisecond,
+	}
+}
+
+// ReportHttpEvent 一票否决
+func (m *FirewallSetManager) ReportHttpEvent(ip string, port int) {
+	select {
+	case m.httpEventChan <- reportEvent{ip: ip, port: port}:
+	default:
+		m.log.Warnf("HTTP event channel full, dropping event for %s:%d", ip, port)
+	}
+}
+
+// ReportNonHttpEvent 累积计分
+func (m *FirewallSetManager) ReportNonHttpEvent(ip string, port int) {
+	select {
+	case m.nonHttpEventChan <- reportEvent{ip: ip, port: port}:
+	default:
+		m.log.Warnf("Non-HTTP event channel full, dropping event for %s:%d", ip, port)
 	}
 }
 
@@ -95,61 +158,66 @@ func (m *FirewallSetManager) worker() {
 	batches := make(map[string]map[string]firewallAddItem)
 
 	// 批处理计时器
-	timer := time.NewTimer(m.maxBatchWait)
-	if !timer.Stop() {
-		<-timer.C
+	batchTimer := time.NewTimer(m.maxBatchWait)
+	if !batchTimer.Stop() {
+		<-batchTimer.C
 	}
+
+	// 画像清理计时器
+	cleanupTicker := time.NewTicker(m.profileCleanupInterval)
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
 		case <-m.stopChan:
 			// 收到停止信号
 			close(m.queue)
-			for item := range m.queue {
-				key := m.batchKey(item)
-				dedupKey := fmt.Sprintf("%s:%d", item.ip, item.port)
-				if _, ok := batches[key]; !ok {
-					batches[key] = make(map[string]firewallAddItem)
-				}
-				batches[key][dedupKey] = item
-			}
 			m.executeBatches(batches)
+			// 清理所有画像计时器
+			m.profileLock.Lock()
+			for _, profile := range m.portProfiles {
+				if profile.decisionTimer != nil {
+					profile.decisionTimer.Stop()
+				}
+			}
+			m.profileLock.Unlock()
 			return
 
 		case item := <-m.queue:
 			key := m.batchKey(item)
 			dedupKey := fmt.Sprintf("%s:%d", item.ip, item.port)
-
-			// 检查外层 map 是否已初始化
 			if _, ok := batches[key]; !ok {
 				batches[key] = make(map[string]firewallAddItem)
 			}
-
-			// 添加到内层 map (自动去重)
 			batches[key][dedupKey] = item
 			if len(batches) == 1 && len(batches[key]) == 1 {
-				timer.Reset(m.maxBatchWait)
+				batchTimer.Reset(m.maxBatchWait)
 			}
-
 			if len(batches[key]) >= m.maxBatchSize {
-				m.log.Debugf("Batch full for %s, executing all pending batches", key)
 				m.executeBatches(batches)
 				batches = make(map[string]map[string]firewallAddItem)
-				if !timer.Stop() {
+				if !batchTimer.Stop() {
 					select {
-					case <-timer.C:
+					case <-batchTimer.C:
 					default:
 					}
 				}
 			}
 
-		case <-timer.C:
-			// 计时器触发
+		case <-batchTimer.C:
 			if len(batches) > 0 {
-				m.log.Debugf("Batch timer expired, executing %d pending batches", len(batches))
 				m.executeBatches(batches)
 				batches = make(map[string]map[string]firewallAddItem)
 			}
+
+		case event := <-m.httpEventChan:
+			m.handleHttpEvent(event.ip, event.port)
+
+		case event := <-m.nonHttpEventChan:
+			m.handleNonHttpEvent(event.ip, event.port)
+
+		case <-cleanupTicker.C:
+			m.cleanupProfiles()
 		}
 	}
 }
@@ -202,9 +270,9 @@ func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewa
 			var stdin strings.Builder
 			for _, item := range items {
 				if item.timeout > 0 {
-					fmt.Fprintf(&stdin, "add %s %s,%d timeout %d\n", setName, item.ip, item.port, item.timeout)
+					fmt.Fprintf(&stdin, "add %s %s,%d timeout %d -exist\n", setName, item.ip, item.port, item.timeout)
 				} else {
-					fmt.Fprintf(&stdin, "add %s %s,%d\n", setName, item.ip, item.port)
+					fmt.Fprintf(&stdin, "add %s %s,%d -exist\n", setName, item.ip, item.port)
 				}
 			}
 			cmd.Stdin = strings.NewReader(stdin.String())
@@ -237,5 +305,109 @@ func (m *FirewallSetManager) executeBatches(batches map[string]map[string]firewa
 				cmd.Process.Kill()
 			}
 		}
+	}
+}
+
+func (m *FirewallSetManager) handleHttpEvent(ip string, port int) {
+	m.profileLock.Lock()
+	defer m.profileLock.Unlock()
+
+	key := fmt.Sprintf("%s:%d", ip, port)
+	profile, ok := m.portProfiles[key]
+	if !ok {
+		profile = &portProfile{}
+		m.portProfiles[key] = profile
+	}
+
+	// 豁免期内，直接返回
+	if time.Now().Before(profile.httpLockExpires) {
+		return
+	}
+
+	m.log.Debugf("HTTP event for %s, resetting score and setting cooldown.", key)
+	// 重置非HTTP分数，设置新的豁免期
+	profile.nonHttpScore = 0
+	profile.httpLockExpires = time.Now().Add(m.httpCooldownPeriod)
+	profile.lastEvent = time.Now()
+
+	// 如果存在决策计时器，说明之前已满足非HTTP条件，现在取消
+	if profile.decisionTimer != nil {
+		profile.decisionTimer.Stop()
+		profile.decisionTimer = nil
+		m.log.Infof("Cancelled firewall add for %s due to new HTTP activity.", key)
+	}
+}
+
+func (m *FirewallSetManager) handleNonHttpEvent(ip string, port int) {
+	m.profileLock.Lock()
+	defer m.profileLock.Unlock()
+
+	key := fmt.Sprintf("%s:%d", ip, port)
+	profile, ok := m.portProfiles[key]
+	if !ok {
+		profile = &portProfile{}
+		m.portProfiles[key] = profile
+	}
+
+	// 在HTTP豁免期内，忽略此次非HTTP报告
+	if time.Now().Before(profile.httpLockExpires) {
+		m.log.Debugf("Ignored non-HTTP event for %s during HTTP cooldown.", key)
+		return
+	}
+
+	// 累积非HTTP分数
+	profile.nonHttpScore++
+	profile.lastEvent = time.Now()
+	m.log.Debugf("Non-HTTP event for %s, score is now %d.", key, profile.nonHttpScore)
+
+	// 检查是否达到阈值，并且当前没有正在等待的决策计时器
+	if profile.nonHttpScore >= m.nonHttpThreshold && profile.decisionTimer == nil {
+		m.log.Infof("Threshold reached for %s. Starting decision timer (%s).", key, m.decisionDelay)
+		// 启动延迟决策计时器
+		profile.decisionTimer = time.AfterFunc(m.decisionDelay, func() {
+			m.finalizeDecision(ip, port)
+		})
+	}
+}
+
+func (m *FirewallSetManager) finalizeDecision(ip string, port int) {
+	m.profileLock.Lock()
+	defer m.profileLock.Unlock()
+
+	key := fmt.Sprintf("%s:%d", ip, port)
+	profile, ok := m.portProfiles[key]
+
+	// 再次检查条件，如果在延迟期间收到了HTTP事件，profile可能已被修改或删除
+	if !ok || profile.nonHttpScore < m.nonHttpThreshold || time.Now().Before(profile.httpLockExpires) {
+		m.log.Infof("Final decision for %s aborted (conditions no longer met).", key)
+		if ok {
+			profile.decisionTimer = nil
+		}
+		return
+	}
+
+	m.log.Infof("Decision final for %s. Adding to firewall.", key)
+	m.Add(ip, port, m.firewallIPSetName, m.firewallType, m.defaultTimeout)
+
+	// 从画像中删除，防止重复添加
+	delete(m.portProfiles, key)
+}
+
+func (m *FirewallSetManager) cleanupProfiles() {
+	m.profileLock.Lock()
+	defer m.profileLock.Unlock()
+
+	m.log.Debug("Running port profile cleanup...")
+	now := time.Now()
+	cleanedCount := 0
+	for key, profile := range m.portProfiles {
+		// 清理那些长时间不活跃，且未进入决策流程的条目
+		if profile.decisionTimer == nil && now.Sub(profile.lastEvent) > m.profileCleanupInterval {
+			delete(m.portProfiles, key)
+			cleanedCount++
+		}
+	}
+	if cleanedCount > 0 {
+		m.log.Debugf("Cleaned up %d stale port profiles.", cleanedCount)
 	}
 }

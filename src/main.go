@@ -65,7 +65,7 @@ func main() {
 		logrus.Fatalf("Failed to create LRU cache: %v", err)
 	}
 
-	fwManager := NewFirewallSetManager(logrus.StandardLogger(), 10000)
+	fwManager := NewFirewallSetManager(logrus.StandardLogger(), 10000, config)
 	fwManager.Start()
 	defer fwManager.Stop()
 	handler := NewHTTPHandler(config, stats, uaCache, fwManager)
