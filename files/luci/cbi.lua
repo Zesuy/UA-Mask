@@ -187,9 +187,9 @@ iface = main:taboption("network", Value, "iface", "监听接口")
 iface.default = "br-lan"
 iface.description = "指定监听的 LAN 口。"
 
-enable_firewall_set = main:taboption("network", Flag, "enable_firewall_set", "启用防火墙加速")
+enable_firewall_set = main:taboption("network", Flag, "enable_firewall_set", "启用流量卸载")
 enable_firewall_set.default = 0
-enable_firewall_set.description = "启用后，将创建一个 ipset（fw3）或 nfset（fw4），用于动态绕过特定目标 IP 和端口的组合，不会再进入 UAmask 处理，这将大幅提升性能。<br>如果您使用 iptables，请确保安装 ipset 软件包。"
+enable_firewall_set.description = "启用后，将动态绕过特定目标 IP 和端口的组合，不会再进入 UAmask ，这将大幅提升性能，实现内核级优化。<br>如果您使用 iptables，请确保安装 ipset 软件包。"
 
 Firewall_ua_bypass=main:taboption("network", Flag, "Firewall_ua_bypass", "绕过非http流量")
 Firewall_ua_bypass:depends("enable_firewall_set", "1")
@@ -198,7 +198,7 @@ Firewall_ua_bypass.description = "启用后，绕过使用非 HTTP 流量的 IP 
 Firewall_ua_whitelist= main:taboption("network", Value, "Firewall_ua_whitelist", "UA 关键词白名单")
 Firewall_ua_whitelist:depends("enable_firewall_set", "1")
 Firewall_ua_whitelist.placeholder = ""
-Firewall_ua_whitelist.description = "指定不通过 UAmask 代理的 UA 关键词（防火墙级别绕过），用逗号分隔（如：Valve/Steam,360pcdn）。"
+Firewall_ua_whitelist.description = "指定不通过 UAmask 代理的 UA 关键词（流量卸载），用逗号分隔（如：Valve/Steam,360pcdn）。"
 
 Firewall_drop_on_match=main:taboption("network", Flag, "Firewall_drop_on_match", "匹配时断开连接")
 Firewall_drop_on_match:depends("enable_firewall_set", "1")
@@ -223,7 +223,7 @@ bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 
 -- === Tab 3: 高级设置（防火墙高级设置）===
 firewall_advanced_settings = main:taboption("advanced", Flag, "firewall_advanced_settings", "决策器设置")
-firewall_advanced_settings.description = "启用后，您可以自定义防火墙绕过中对非http决策器的参数"
+firewall_advanced_settings.description = "启用后，您可以自定义流量卸载中决策器的参数"
 
 firewall_nonhttp_threshold = main:taboption("advanced", Value, "firewall_nonhttp_threshold", "非 HTTP 判定阈值")
 firewall_nonhttp_threshold:depends("firewall_advanced_settings", "1")

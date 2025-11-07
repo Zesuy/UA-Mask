@@ -8,7 +8,7 @@
 - [界面字段详解（与 LuCI 一一对应）](#界面字段详解与-luci-一一对应)
 - [与 OpenClash 共存](#与-openclash-共存)
 - [运行统计详解（页面“状态”卡片）](#运行统计详解页面状态卡片)
-- [防火墙绕过（基于 ipset/nfset）](#防火墙绕过基于-ipsetnfset)
+- [流量卸载（基于 ipset/nfset）](#流量卸载基于-ipsetnfset)
 - [防检测策略与推荐组合](#防检测策略与推荐组合)
 - [匹配规则编写示例](#匹配规则编写示例)
 - [验证与排错（必看）](#验证与排错必看)
@@ -23,7 +23,7 @@
 1) 安装（任选其一）
 
 - 预编译包：到 Releases 下载与你设备架构匹配的 `.ipk`，然后在路由器上安装。
-  - iptables 用户若要启用“防火墙加速”，请先安装 ipset。
+  - iptables 用户若要启用“流量卸载”，请先安装 ipset。
 
   ```sh
   opkg update
@@ -48,7 +48,7 @@
 - 代理主机流量：如果你的路由“本机”也需要被修改 UA，才开启。与 OpenClash 共存时建议遵循下文“完美分流方案”。
 - 绕过目标端口：默认 22 443。
   - 若你“安全优先”，建议移除 443（原因见下文“安全优先方案”）。
-- 启用防火墙加速（可选，高性能）：iptables 用户务必先装 ipset。
+- 启用流量卸载（可选，高性能）：iptables 用户务必先装 ipset。
 
 5) 保存并应用。运行状态显示“运行中”。
 
@@ -56,7 +56,7 @@
 
 - 从 LAN 内的一台设备访问[ua检验](http://ua.233996.xyz/)，应看到 UA 已变为你设定的值。
 
-提示：UA-Mask仅在“明文 HTTP”中可见效果；HTTPS 流量不会修改 UA（TLS 加密后 UA 不可见）。
+提示：UA-Mask 仅在“明文 HTTP”中可见效果；HTTPS 流量不会修改 UA（TLS 加密后 UA 不可见）。
 
 ---
 
@@ -87,16 +87,26 @@
 
 - 监听端口（port）：默认 12032。
 - 监听接口（iface）：默认 br-lan，可多接口空格分隔。
-- 启用防火墙加速（enable_firewall_set）：创建 ipset/nfset 以“跳过”特定 ip:port，提高性能（见下节“防火墙绕过”）。
-- 防火墙 UA 白名单（Firewall_ua_whitelist）：命中这些 UA 的连接，直接将“目标 ip:port”加入 set 绕过（典型如 Steam）。
-- 使用防火墙非 HTTP 绕过（Firewall_ua_bypass）：一旦识别为“非 HTTP”，临时绕过该 ip:port（默认 10 分钟）。
-- 匹配时断开连接: 一旦UA规则，将立刻断开连接，强制流量不进入UAmask,这将有利于ipset马上生效。而不必等下一次连接开始。
+- 启用流量卸载（enable_firewall_set）：创建 ipset/nfset 以“跳过”特定 ip:port，提高性能（见下节“流量卸载”）。
+- UA 关键词白名单（Firewall_ua_whitelist）：命中这些 UA 关键词的连接，将目标 ip:port 动态加入 set 卸载（典型如 Steam）。
+- 绕过非http流量（Firewall_ua_bypass）：当识别为“非 HTTP”后，交由决策器评估并暂时卸载该 ip:port，降低负载。
+- 匹配时断开连接（Firewall_drop_on_match）：命中“UA 关键词白名单”时立即断开，强制新连接走卸载路径，加速生效。
 - 代理主机流量（proxy_host）：是否也代理路由器自身的流量；为避免与其他代理回环冲突，若不需要可关闭。
 - 绕过 GID（bypass_gid）：默认 65533，用于豁免自身流量；脚本同时豁免 OpenClash 的 65534，防循环。
 - 绕过目标端口（bypass_ports）：默认“22 443”。
 - 绕过目标 IP（bypass_ips）：默认局域网与保留网段。
 
-### 3. 应用日志（Softlog）
+### 3. 高级设置（决策器）
+
+- 决策器设置（firewall_advanced_settings）：开启后可自定义卸载决策逻辑参数。
+- 非 HTTP 判定阈值（firewall_nonhttp_threshold）：将某 ip:port 判定为“非 HTTP”前需累计的非 HTTP 事件次数（默认 5）。
+- 决策延迟时间（秒）（firewall_decision_delay）：达到阈值后，延迟多久再做卸载决策，避免误判（默认 60s）。
+- 防火墙规则超时（秒）（firewall_timeout）：加入 set 的元素超时（默认 28800 秒=8 小时）。
+
+说明：
+- 决策过程中如出现 HTTP 活动，会触发“HTTP 豁免期”，对该 ip:port 的卸载判定被一票否决并延后，进一步降低误判与 UA 泄露风险。
+
+### 4. 应用日志（Softlog）
 
 - 日志等级（log_level）：debug/info/warn/error 等。
 - 应用日志路径（log_file）：建议放 /tmp，避免刷写闪存。
@@ -173,29 +183,30 @@ graph LR
 
 ---
 
-## 防火墙绕过（基于 ipset/nfset）
+## 流量卸载（基于 ipset/nfset）
 
-为降低 CPU 负载、提升高并发性能，引入“set 绕过”。启用路径：服务 -> UA-Mask -> 网络与防火墙 -> 勾选“启用防火墙加速”。
+为降低 CPU 负载、提升高并发性能，引入“流量卸载（set 绕过）”。启用路径：服务 -> UA-Mask -> 网络与防火墙 -> 勾选“启用流量卸载”。
 
 iptables 用户：请先安装 ipset。
 
-包含两种绕过：
+包含两种卸载：
 
-1) 绕过非http流量（Firewall_ua_bypass）
+1) 绕过非 http 流量（Firewall_ua_bypass）
 
-- 原理：识别到某连接是“非 HTTP”后，将其目标 ip:port 暂存到 UAmask_bypass_set（默认超时 10 分钟）。
+- 原理：识别到某 ip:port 多次出现“非 HTTP”连接后，进入“决策延迟”观察期；若期间无 HTTP 活动，一次性加入 UAmask_bypass_set，超时后自动移除（默认 8 小时，可在“防火墙规则超时（秒）”调整）。
+- 安全：若观察期内出现 HTTP 活动，会触发“HTTP 豁免期”，之前的非 HTTP 累积分数被一票否决，避免误判导致 UA 泄露。
 - 效果：该 ip:port 的后续新连接被防火墙直接放行，不再进入 UA-Mask 检测，显著减负。
 
-2) 防火墙 UA 白名单（Firewall_ua_whitelist）
+2) UA 关键词白名单（Firewall_ua_whitelist）
 
-- 原理：若某连接的 UA 命中你的“UA 关键词”，立即把该目标 ip:port 加入 set 绕过。
+- 原理：若某连接的 UA 命中你配置的“UA 关键词”，立即把该目标 ip:port 加入 set 卸载。
 - 适用：高带宽、长连接但 UA“无敏感标识”的流量（如 Steam 下载）。
 - 示例关键词：Valve/Steam, steam, steamworks, 360pcdn, ByteDancePcdn（按需取舍）。
-- 选项：匹配时断开连接，启用该选项将在匹配到UA时马上断开连接，这将让steam等流量完全不会进入UA-Mask，但这可能会让steam提示无法连接到服务器，建议多试几次，若非苛求性能不建议启用
+- 可选：匹配时断开连接（Firewall_drop_on_match）。命中后立刻断开现有连接，促使后续连接直接走卸载路径。可能会出现应用端“需重试”的提示，非苛求性能时可不启用。
 
 重要提醒（性能 vs 风险）
 
-- 被加入绕过 set 的 ip:port 在超时时间内会“完全绕过 UA-Mask”。这有可能导致“真实 UA 泄露”。请按你的环境权衡使用。
+- 被加入卸载 set 的 ip:port 在超时时间内会“完全绕过 UA-Mask”。这有可能导致“真实 UA 泄露”。请按你的环境权衡使用，尽量结合“非 HTTP 决策器”与谨慎的白名单关键词。
 
 ---
 
@@ -204,11 +215,11 @@ iptables 用户：请先安装 ipset。
 方案一：性能优先（大多数环境）
 
 - 匹配规则：正则 + 部分替换（兼容性好）。
-- 启用防火墙加速；同时开启“非 HTTP 绕过”和“UA 白名单”（加入 Steam 等关键词）。
+- 启用流量卸载；同时开启“绕过非 http 流量”和“UA 关键词白名单”（加入 Steam 等关键词）。
 
 方案二：安全优先（严格环境）
 
-- 关闭防火墙加速与 UA 白名单。
+- 关闭流量卸载与 UA 关键词白名单。
 - 检查“绕过目标端口”中移除 443，以防极少数明文 HTTP 走 443 导致 UA 泄露。
 
 ---
@@ -260,9 +271,9 @@ iptables 用户：请先安装 ipset。
 - “HTTPS 看不到效果”：属正常，UA 仅在 HTTP 明文里；用 http://httpbin.org/user-agent 验证。
 - “访问变慢/CPU 高”：尽量使用“关键词模式”；或改为 Medium/Low 预设；减少正则复杂度。
 - “与 OpenClash 冲突/循环”：按本文“完美分流方案”设置；必要时重启 UA-Mask 使其规则位于更前面；保留绕过 GID 65534。
-- “Steam 下载 UA 泄露担忧”：别启用“UA 白名单”或仅在下载时短时启用；或不用 set 绕过。
+- “Steam 下载 UA 泄露担忧”：别启用“UA 关键词白名单”或仅在下载时短时启用；或不用 set 卸载。
 - “运行统计不更新”：服务需运行一段时间才生成 /tmp/UAmask.stats；先确认进程与日志。
-- “启动失败”：确认 /usr/bin/UAmask 存在；若启用 set 绕过，iptables 机型需安装 ipset。
+- “启动失败”：确认 /usr/bin/UAmask 存在；若启用流量卸载，iptables 机型需安装 ipset。
 
 ---
 
@@ -308,7 +319,7 @@ http.request and http.user_agent
 - 判断是否存在“未被替换”的 UA（与 UA-Mask 配置值不一致的、或带有设备真实标识的 UA）
 
 6) 若确认存在 UA 泄露，定位与修复
-- 检查是否被加入绕过 set（会直接跳过 UA-Mask）：
+- 检查是否被加入卸载 set（会直接跳过 UA-Mask）：
 ```sh
 # iptables 机型（ipset）
 ipset list UAmask_bypass_set 2>/dev/null | sed -n '1,100p'
@@ -323,8 +334,8 @@ ipset del UAmask_bypass_set <ip>,<port>
 nft delete element inet fw4 UAmask_bypass_set { <ip> . <port> }
 ```
 - 调整配置后复测：
-  - 关闭“使用防火墙非 HTTP 绕过”
-  - 清空或精简“防火墙 UA 白名单”（避免把高带宽下载目标加到绕过）
+  - 关闭“绕过非 http 流量”
+  - 清空或精简“UA 关键词白名单”（避免把高带宽下载目标加到卸载）
   - 安全优先时，在“绕过目标端口”移除 443
   - 确认 UA-Mask 规则优先级在前（见“与 OpenClash 共存/验证共存”命令）
   - 尽量使用“关键词模式”或“正则+部分替换”提升命中率与兼容性
@@ -383,7 +394,8 @@ config 'UAmask' 'main'
     option ua_regex '(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)'
     option whitelist ''
     option log_file '/tmp/UAmask/UAmask.log'
-    # 以下为界面新增的可选项（按需出现）
+
+    # 运行参数（预设/自定义）
     # option operating_profile 'Medium|Low|High|custom'
     # option cache_size '3000'
     # option buffer_size '8192'
@@ -392,9 +404,18 @@ config 'UAmask' 'main'
     # option match_mode 'keywords|regex|all'
     # option keywords 'Windows,Linux,Android,iPhone,Macintosh,iPad,OpenHarmony'
     # option replace_method 'full|partial'
+
+    # 流量卸载
     # option enable_firewall_set '0|1'
     # option Firewall_ua_whitelist ''
     # option Firewall_ua_bypass '0|1'
+    # option Firewall_drop_on_match '0|1'
+
+    # 决策器（高级设置开启后生效）
+    # option firewall_advanced_settings '0|1'
+    # option firewall_nonhttp_threshold '5'
+    # option firewall_decision_delay '60'
+    # option firewall_timeout '28800'
 ```
 
 ---
@@ -419,7 +440,7 @@ config 'UAmask' 'main'
     ![关于共存的思考](./img/after-think-clash.png)
     ![完美的共存方案](./img/after-spark-clash.png)
 
-4.  **引入 ipset/nfset 绕过**：我们发现，超过 90% 的流量（如 Steam 下载）并不需要修改 UA。因此，我们引入了 `ipset/nfset`，将这些高带宽流量动态加入绕过列表，使其直接通过内核转发，不再消耗 UA-Mask 的资源，实现了性能的飞跃。
+4.  **引入 ipset/nfset 卸载**：我们发现，超过 90% 的流量（如 Steam 下载）并不需要修改 UA。因此，引入 `ipset/nfset`，将这些高带宽流量动态加入卸载列表，使其直接通过内核转发，不再消耗 UA-Mask 的资源，实现了性能的飞跃。
     ![发现高带宽流量的瓶颈](./img/ipset-think.png)
     ![引入 set 绕过的灵感](./img/ipset-spark.png)
     ![爱上纯内核转发的性能](./img/ipset-love.png)
