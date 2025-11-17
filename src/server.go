@@ -109,14 +109,11 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 	}
 	defer serverConn.Close()
 
-	// 为两个连接设置 I/O 超时
+	clientIOConn := net.Conn(clientConn)
+	serverIOConn := serverConn
 	if Timeout > 0 {
-		deadline := time.Now().Add(Timeout)
-		clientConn.SetDeadline(deadline)
-		serverConn.SetDeadline(deadline)
-		// 使用 defer 确保在函数退出时清除 deadline
-		defer clientConn.SetDeadline(time.Time{})
-		defer serverConn.SetDeadline(time.Time{})
+		clientIOConn = wrapWithIdleTimeout(clientConn, Timeout)
+		serverIOConn = wrapWithIdleTimeout(serverConn, Timeout)
 	}
 
 	// 双向转发数据
@@ -125,18 +122,45 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 	// 客户端 -> 服务器 (调用 handler 修改 UA)
 	go func() {
 		defer serverConn.(*net.TCPConn).CloseWrite()
-		s.handler.ModifyAndForward(serverConn, clientConn, destAddrPort, originalDst.IP.String(), originalDst.Port)
+		s.handler.ModifyAndForward(serverIOConn, clientIOConn, destAddrPort, originalDst.IP.String(), originalDst.Port)
 		done <- struct{}{}
 	}()
 
 	// 服务器 -> 客户端 (直接转发)
 	go func() {
 		defer clientConn.CloseWrite()
-		io.Copy(clientConn, serverConn)
+		io.Copy(clientIOConn, serverIOConn)
 		done <- struct{}{}
 	}()
 
 	// 等待两个方向的转发完成
 	<-done
 	<-done
+}
+
+// 现在每当有读写操作时，都会重置读写超时时间
+type idleTimeoutConn struct {
+	net.Conn
+	idle time.Duration
+}
+
+func wrapWithIdleTimeout(conn net.Conn, idle time.Duration) net.Conn {
+	if idle <= 0 {
+		return conn
+	}
+	return &idleTimeoutConn{Conn: conn, idle: idle}
+}
+
+func (c *idleTimeoutConn) Read(p []byte) (int, error) {
+	if c.idle > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.idle))
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *idleTimeoutConn) Write(p []byte) (int, error) {
+	if c.idle > 0 {
+		_ = c.Conn.SetWriteDeadline(time.Now().Add(c.idle))
+	}
+	return c.Conn.Write(p)
 }
