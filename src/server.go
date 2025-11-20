@@ -93,15 +93,15 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 		clientConn.LocalAddr().String(),
 		destAddrPort)
 
-	// 使用 DialTimeout 连接到原始目标
-	var serverConn net.Conn
-	var Timeout time.Duration = 5 * time.Minute
-	if Timeout > 0 {
-		dialer := net.Dialer{Timeout: Timeout}
-		serverConn, err = dialer.Dial("tcp", destAddrPort)
-	} else {
-		serverConn, err = net.Dial("tcp", destAddrPort)
+	// 开启客户端 KeepAlive，移除原来的应用层超时
+	clientConn.SetKeepAlive(true)
+	clientConn.SetKeepAlivePeriod(3 * time.Minute)
+
+	dialer := net.Dialer{
+		Timeout:   30 * time.Second, // 握手超时
+		KeepAlive: 3 * time.Minute,  // 保持长连接
 	}
+	serverConn, err := dialer.Dial("tcp", destAddrPort)
 
 	if err != nil {
 		logrus.Debugf("[server] Failed to connect to %s: %v", destAddrPort, err)
@@ -111,10 +111,6 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 
 	clientIOConn := net.Conn(clientConn)
 	serverIOConn := serverConn
-	if Timeout > 0 {
-		clientIOConn = wrapWithIdleTimeout(clientConn, Timeout)
-		serverIOConn = wrapWithIdleTimeout(serverConn, Timeout)
-	}
 
 	// 双向转发数据
 	done := make(chan struct{}, 2)
@@ -136,31 +132,4 @@ func (s *Server) handleConnection(clientConn *net.TCPConn) {
 	// 等待两个方向的转发完成
 	<-done
 	<-done
-}
-
-// 现在每当有读写操作时，都会重置读写超时时间
-type idleTimeoutConn struct {
-	net.Conn
-	idle time.Duration
-}
-
-func wrapWithIdleTimeout(conn net.Conn, idle time.Duration) net.Conn {
-	if idle <= 0 {
-		return conn
-	}
-	return &idleTimeoutConn{Conn: conn, idle: idle}
-}
-
-func (c *idleTimeoutConn) Read(p []byte) (int, error) {
-	if c.idle > 0 {
-		_ = c.Conn.SetReadDeadline(time.Now().Add(c.idle))
-	}
-	return c.Conn.Read(p)
-}
-
-func (c *idleTimeoutConn) Write(p []byte) (int, error) {
-	if c.idle > 0 {
-		_ = c.Conn.SetWriteDeadline(time.Now().Add(c.idle))
-	}
-	return c.Conn.Write(p)
 }
