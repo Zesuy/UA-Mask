@@ -2,8 +2,8 @@ include $(TOPDIR)/rules.mk
 
 # 1. 修改包名和版本
 PKG_NAME:=UAmask
-PKG_VERSION:=0.4.2
-PKG_RELEASE:=2
+PKG_VERSION:=0.4.3
+PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Zesuy <hongri580@gmail.com>
 PKG_LICENSE:=GPL-3.0-only
