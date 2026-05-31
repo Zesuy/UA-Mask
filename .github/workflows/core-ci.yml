@@ -1,0 +1,84 @@
+name: Core CI
+
+on:
+  pull_request:
+    paths:
+      - "core/**"
+      - "go.work"
+      - ".github/workflows/core-ci.yml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "core/**"
+      - "go.work"
+      - ".github/workflows/core-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: core-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: |
+            core/go.sum
+            go.work
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Format check
+        run: make fmt-check
+
+      - name: Vet
+        run: make vet
+
+      - name: Unit tests with coverage
+        run: go test -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Build
+        run: make build
+
+      - name: Coverage summary
+        run: |
+          echo "## Core coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out | tee coverage.txt
+          total_line=$(tail -n 1 coverage.txt)
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "$total_line" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-coverage
+          path: |
+            core/coverage.out
+            core/coverage.txt
+
+      - name: Build linux amd64 binary
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -o dist/UAmask-linux-amd64 ./cmd/UAmask
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-linux-amd64
+          path: core/dist/UAmask-linux-amd64
