@@ -1,6 +1,10 @@
 package stats
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"UAmask/internal/model"
+)
 
 type Snapshot struct {
 	ActiveConnections uint64
@@ -53,5 +57,25 @@ func (s *Stats) Snapshot() Snapshot {
 		ModifiedRequests:  s.modifiedRequests.Load(),
 		CacheHits:         s.cacheHits.Load(),
 		CacheHitNoModify:  s.cacheHitNoModify.Load(),
+	}
+}
+
+func (s *Stats) Append(event model.SessionEvent) {
+	switch event.Type {
+	case model.EventSessionOpened:
+		s.ConnectionOpened()
+	case model.EventSessionClosed:
+		s.ConnectionClosed()
+	case model.EventHTTPRequestObserved:
+		s.RecordHTTPRequest()
+	case model.EventRewriteApplied:
+		s.RecordModifiedRequest()
+		if event.FromCache {
+			s.RecordCacheHitModified()
+		}
+	case model.EventRewriteSkipped:
+		if event.FromCache {
+			s.RecordCacheHitPassthrough()
+		}
 	}
 }

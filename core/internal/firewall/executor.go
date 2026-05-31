@@ -53,15 +53,21 @@ func (e *Executor) Stop() {
 }
 
 func (e *Executor) Enqueue(target BypassTarget) {
+	_ = e.TryEnqueue(target)
+}
+
+func (e *Executor) TryEnqueue(target BypassTarget) bool {
 	if !isValidTarget(target) {
 		e.log.Warnf("[FirewallExecutor] Invalid bypass target: %+v", target)
-		return
+		return false
 	}
 
 	select {
 	case e.queue <- target:
+		return true
 	case <-time.After(50 * time.Millisecond):
 		e.log.Warnf("[FirewallExecutor] queue full, dropping target for %s:%d", target.IP, target.Port)
+		return false
 	}
 }
 

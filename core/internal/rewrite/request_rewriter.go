@@ -2,10 +2,6 @@ package rewrite
 
 import "net/http"
 
-type BypassSink interface {
-	EnqueueBypass(ip string, port int, timeout int)
-}
-
 type Result struct {
 	Decision  Decision
 	FromCache bool
@@ -13,22 +9,18 @@ type Result struct {
 }
 
 type RequestRewriter struct {
-	engine                *Engine
-	cache                 *UACache
-	bypassSink            BypassSink
-	immediateBypassTimout int
+	engine *Engine
+	cache  *UACache
 }
 
-func NewRequestRewriter(engine *Engine, cache *UACache, bypassSink BypassSink, immediateBypassTimeout int) *RequestRewriter {
+func NewRequestRewriter(engine *Engine, cache *UACache) *RequestRewriter {
 	return &RequestRewriter{
-		engine:                engine,
-		cache:                 cache,
-		bypassSink:            bypassSink,
-		immediateBypassTimout: immediateBypassTimeout,
+		engine: engine,
+		cache:  cache,
 	}
 }
 
-func (r *RequestRewriter) Rewrite(request *http.Request, destIP string, destPort int) Result {
+func (r *RequestRewriter) Rewrite(request *http.Request, _ string, _ int) Result {
 	originUA := request.Header.Get("User-Agent")
 	if originUA == "" {
 		return Result{
@@ -55,9 +47,6 @@ func (r *RequestRewriter) Rewrite(request *http.Request, destIP string, destPort
 	}
 
 	decision := r.engine.Evaluate(originUA)
-	if decision.FirewallBypassHit && r.bypassSink != nil {
-		r.bypassSink.EnqueueBypass(destIP, destPort, r.immediateBypassTimout)
-	}
 
 	if decision.Replace {
 		request.Header.Set("User-Agent", decision.FinalUA)

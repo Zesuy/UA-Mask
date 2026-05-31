@@ -80,7 +80,7 @@ func TestProcessorRewritesHTTPRequests(t *testing.T) {
 	metrics := &metricsStub{}
 	processor := NewProcessor(
 		config.ListenConfig{BufferSize: 4096},
-		rewrite.NewRequestRewriter(engine, cache, nil, 0),
+		rewrite.NewRequestRewriter(engine, cache),
 		reporter,
 		metrics,
 	)
@@ -122,7 +122,7 @@ func TestProcessorFallsBackForNonHTTP(t *testing.T) {
 	metrics := &metricsStub{}
 	processor := NewProcessor(
 		config.ListenConfig{BufferSize: 4096},
-		rewrite.NewRequestRewriter(engine, cache, nil, 0),
+		rewrite.NewRequestRewriter(engine, cache),
 		reporter,
 		metrics,
 	)

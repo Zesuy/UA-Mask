@@ -1,12 +1,12 @@
 package proxy
 
-import "net"
+import (
+	"net"
 
-type Target struct {
-	Address string
-	IP      string
-	Port    int
-}
+	"UAmask/internal/model"
+)
+
+type Target = model.Target
 
 type RequestProcessor interface {
 	Process(dst net.Conn, src net.Conn, target Target)

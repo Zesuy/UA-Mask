@@ -4,9 +4,15 @@ import (
 	"fmt"
 
 	"UAmask/internal/config"
+	"UAmask/internal/events"
 	"UAmask/internal/firewall"
+	"UAmask/internal/ingress"
+	"UAmask/internal/offload"
+	"UAmask/internal/policy"
 	"UAmask/internal/proxy"
 	"UAmask/internal/rewrite"
+	"UAmask/internal/session"
+	"UAmask/internal/state"
 	"UAmask/internal/stats"
 
 	"github.com/sirupsen/logrus"
@@ -19,8 +25,9 @@ type Runtime struct {
 	version          string
 	stats            *stats.Stats
 	statsReporter    *stats.FileReporter
+	profileStore     *state.Store
 	firewallExecutor *firewall.Executor
-	firewallDecision *firewall.DecisionEngine
+	offload          *offload.Coordinator
 	server           *proxy.Server
 }
 
@@ -55,43 +62,54 @@ func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {
 	}
 
 	firewallExecutor := firewall.NewExecutor(logrus.StandardLogger(), firewallQueueSize, firewall.NewCommandApplier())
-	whitelistSink := firewall.NewWhitelistBypassSink(firewallExecutor, cfg.Firewall.SetName, cfg.Firewall.Backend)
 
 	ruleEngine := rewrite.NewEngine(cfg.Rewrite, cfg.RewriteRuntime, cfg.Firewall)
-	requestRewriter := rewrite.NewRequestRewriter(ruleEngine, cache, whitelistSink, cfg.Firewall.ImmediateBypassTimeout)
+	requestRewriter := rewrite.NewRequestRewriter(ruleEngine, cache)
 
-	var trafficReporter proxy.TrafficReporter = firewall.NoopReporter{}
-	var firewallDecision *firewall.DecisionEngine
+	profileStore := state.NewStore(state.Config{
+		NonHTTPThreshold:       cfg.Firewall.NonHTTPThreshold,
+		HTTPCooldownPeriod:     cfg.Firewall.HTTPCooldownPeriod,
+		DecisionDelay:          cfg.Firewall.DecisionDelay,
+		ProfileCleanupInterval: cfg.Firewall.ProfileCleanupInterval,
+	})
+
+	var targetOffloader offload.TargetOffloader
 	if cfg.Firewall.EnableBypass {
-		firewallDecision = firewall.NewDecisionEngine(
-			logrus.StandardLogger(),
-			firewallQueueSize,
-			firewall.DecisionConfig{
-				NonHTTPThreshold:       cfg.Firewall.NonHTTPThreshold,
-				HTTPCooldownPeriod:     cfg.Firewall.HTTPCooldownPeriod,
-				DecisionDelay:          cfg.Firewall.DecisionDelay,
-				ProfileCleanupInterval: cfg.Firewall.ProfileCleanupInterval,
-				TargetTemplate: firewall.BypassTarget{
-					SetName: cfg.Firewall.SetName,
-					Backend: cfg.Firewall.Backend,
-					Timeout: cfg.Firewall.Timeout,
-				},
-			},
-			firewall.NewExecutorSink(firewallExecutor),
-		)
-		trafficReporter = firewallDecision
+		targetOffloader = offload.NewFirewallTargetOffloader(firewallExecutor, cfg.Firewall.SetName, cfg.Firewall.Backend)
 	}
 
-	processor := proxy.NewProcessor(cfg.Listen, requestRewriter, trafficReporter, appStats)
-	server := proxy.NewServer(cfg.Listen, processor, appStats)
+	sessionPolicy := policy.NewSessionPolicy(requestRewriter)
+	targetPolicy := policy.NewTargetPolicy(
+		cfg.Firewall.Timeout,
+		cfg.Firewall.ImmediateBypassTimeout,
+		cfg.Firewall.NonHTTPThreshold,
+	)
+	dispatcher := events.NewDispatcher()
+	offloadCoordinator := offload.NewCoordinator(
+		logrus.StandardLogger(),
+		profileStore,
+		targetPolicy,
+		targetOffloader,
+		offload.NoopFlowOffloader{},
+		dispatcher,
+	)
+	dispatcher.Add(profileStore, appStats, offloadCoordinator)
+
+	sessionManager := session.NewManager(cfg.Listen, sessionPolicy, profileStore, offloadCoordinator, dispatcher)
+	redirectIngress, err := ingress.NewRedirect(cfg.Listen)
+	if err != nil {
+		return nil, err
+	}
+	server := proxy.NewServer(cfg.Listen.PoolSize, redirectIngress, sessionManager)
 
 	return &Runtime{
 		config:           cfg,
 		version:          version,
 		stats:            appStats,
 		statsReporter:    statsReporter,
+		profileStore:     profileStore,
 		firewallExecutor: firewallExecutor,
-		firewallDecision: firewallDecision,
+		offload:          offloadCoordinator,
 		server:           server,
 	}, nil
 }
@@ -102,13 +120,13 @@ func (r *Runtime) Run() error {
 	r.firewallExecutor.Start()
 	defer r.firewallExecutor.Stop()
 
-	if r.firewallDecision != nil {
-		r.firewallDecision.Start()
-		defer r.firewallDecision.Stop()
-	}
-
+	r.profileStore.Start()
+	defer r.profileStore.Stop()
 	r.statsReporter.Start()
 	defer r.statsReporter.Stop()
+	if r.offload != nil {
+		defer r.offload.Stop()
+	}
 
 	return r.server.Run()
 }
