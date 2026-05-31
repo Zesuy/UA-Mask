@@ -52,6 +52,14 @@
 - 和openclash完美分流无需冗杂配置，只需要打开openclash的`代理本机`和`绕过大陆`
 ![structure-all](./docs/img/structure-all.png)
 
+## 仓库结构
+
+- `core/`：Go 核心代理程序，包含 `cmd/` 入口和 `internal/` 内部实现。
+- `openwrt/package/`：OpenWrt 包定义与构建入口。
+- `openwrt/root/`：会安装到路由器根文件系统的脚本和默认配置。
+- `openwrt/luci/`：LuCI 页面代码。
+- `docs/`：教程、说明文档和图片资源。
+
 ## ✨ 特性
 
 *   **一键启用**: 自动配置 `nftables` 或 `iptables` 防火墙，开箱即用。
