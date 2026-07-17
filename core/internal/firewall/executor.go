@@ -16,11 +16,25 @@ type Applier interface {
 	ApplyBatch(items []BypassTarget) error
 }
 
+type completionFunc func(error)
+
+type queuedTarget struct {
+	target     BypassTarget
+	completion completionFunc
+}
+
+type pendingTarget struct {
+	target      BypassTarget
+	completions []completionFunc
+}
+
 type Executor struct {
-	queue        chan BypassTarget
+	queue        chan queuedTarget
 	stopChan     chan struct{}
 	stopOnce     sync.Once
 	waitGroup    sync.WaitGroup
+	lifecycleMu  sync.RWMutex
+	stopped      bool
 	log          *logrus.Logger
 	applier      Applier
 	maxBatchSize int
@@ -29,7 +43,7 @@ type Executor struct {
 
 func NewExecutor(log *logrus.Logger, queueSize int, applier Applier) *Executor {
 	return &Executor{
-		queue:        make(chan BypassTarget, queueSize),
+		queue:        make(chan queuedTarget, queueSize),
 		stopChan:     make(chan struct{}),
 		log:          log,
 		applier:      applier,
@@ -46,7 +60,10 @@ func (e *Executor) Start() {
 
 func (e *Executor) Stop() {
 	e.stopOnce.Do(func() {
+		e.lifecycleMu.Lock()
+		e.stopped = true
 		close(e.stopChan)
+		e.lifecycleMu.Unlock()
 	})
 	e.waitGroup.Wait()
 	e.log.Info("[FirewallExecutor] worker stopped")
@@ -57,13 +74,22 @@ func (e *Executor) Enqueue(target BypassTarget) {
 }
 
 func (e *Executor) TryEnqueue(target BypassTarget) bool {
+	return e.TryEnqueueWithResult(target, nil)
+}
+
+func (e *Executor) TryEnqueueWithResult(target BypassTarget, completion func(error)) bool {
 	if !isValidTarget(target) {
 		e.log.Warnf("[FirewallExecutor] Invalid bypass target: %+v", target)
 		return false
 	}
+	e.lifecycleMu.RLock()
+	defer e.lifecycleMu.RUnlock()
+	if e.stopped {
+		return false
+	}
 
 	select {
-	case e.queue <- target:
+	case e.queue <- queuedTarget{target: target, completion: completion}:
 		return true
 	case <-time.After(50 * time.Millisecond):
 		e.log.Warnf("[FirewallExecutor] queue full, dropping target for %s:%d", target.IP, target.Port)
@@ -74,7 +100,7 @@ func (e *Executor) TryEnqueue(target BypassTarget) bool {
 func (e *Executor) worker() {
 	defer e.waitGroup.Done()
 
-	batches := make(map[string]map[string]BypassTarget)
+	batches := make(map[string]map[string]*pendingTarget)
 	batchTimer := time.NewTimer(e.maxBatchWait)
 	if !batchTimer.Stop() {
 		<-batchTimer.C
@@ -82,13 +108,8 @@ func (e *Executor) worker() {
 
 	for {
 		select {
-		case target := <-e.queue:
-			key := batchKey(target)
-			dedupKey := fmt.Sprintf("%s:%d", target.IP, target.Port)
-			if _, ok := batches[key]; !ok {
-				batches[key] = make(map[string]BypassTarget)
-			}
-			batches[key][dedupKey] = target
+		case queued := <-e.queue:
+			key := e.addToBatch(batches, queued)
 
 			if len(batches) == 1 && len(batches[key]) == 1 {
 				batchTimer.Reset(e.maxBatchWait)
@@ -96,7 +117,7 @@ func (e *Executor) worker() {
 
 			if len(batches[key]) >= e.maxBatchSize {
 				e.executeBatches(batches)
-				batches = make(map[string]map[string]BypassTarget)
+				batches = make(map[string]map[string]*pendingTarget)
 				if !batchTimer.Stop() {
 					select {
 					case <-batchTimer.C:
@@ -108,7 +129,7 @@ func (e *Executor) worker() {
 		case <-batchTimer.C:
 			if len(batches) > 0 {
 				e.executeBatches(batches)
-				batches = make(map[string]map[string]BypassTarget)
+				batches = make(map[string]map[string]*pendingTarget)
 			}
 
 		case <-e.stopChan:
@@ -119,23 +140,36 @@ func (e *Executor) worker() {
 	}
 }
 
-func (e *Executor) drainQueue(batches map[string]map[string]BypassTarget) {
+func (e *Executor) drainQueue(batches map[string]map[string]*pendingTarget) {
 	for {
 		select {
-		case target := <-e.queue:
-			key := batchKey(target)
-			dedupKey := fmt.Sprintf("%s:%d", target.IP, target.Port)
-			if _, ok := batches[key]; !ok {
-				batches[key] = make(map[string]BypassTarget)
-			}
-			batches[key][dedupKey] = target
+		case queued := <-e.queue:
+			e.addToBatch(batches, queued)
 		default:
 			return
 		}
 	}
 }
 
-func (e *Executor) executeBatches(batches map[string]map[string]BypassTarget) {
+func (e *Executor) addToBatch(batches map[string]map[string]*pendingTarget, queued queuedTarget) string {
+	key := batchKey(queued.target)
+	dedupKey := fmt.Sprintf("%s:%d", queued.target.IP, queued.target.Port)
+	if _, ok := batches[key]; !ok {
+		batches[key] = make(map[string]*pendingTarget)
+	}
+	pending, ok := batches[key][dedupKey]
+	if !ok {
+		pending = &pendingTarget{}
+		batches[key][dedupKey] = pending
+	}
+	pending.target = queued.target
+	if queued.completion != nil {
+		pending.completions = append(pending.completions, queued.completion)
+	}
+	return key
+}
+
+func (e *Executor) executeBatches(batches map[string]map[string]*pendingTarget) {
 	if len(batches) == 0 {
 		return
 	}
@@ -146,19 +180,36 @@ func (e *Executor) executeBatches(batches map[string]map[string]BypassTarget) {
 		}
 
 		items := make([]BypassTarget, 0, len(itemsMap))
-		for _, item := range itemsMap {
-			items = append(items, item)
+		pendingItems := make([]*pendingTarget, 0, len(itemsMap))
+		for _, pending := range itemsMap {
+			items = append(items, pending.target)
+			pendingItems = append(pendingItems, pending)
 		}
 
-		if err := e.applier.ApplyBatch(items); err != nil {
+		err := e.applier.ApplyBatch(items)
+		if err != nil {
 			first := items[0]
 			e.log.Warnf("[FirewallExecutor] Failed batch %s for set %s (%s): %v", key, first.SetName, first.Backend, err)
-			continue
+		} else {
+			first := items[0]
+			e.log.Debugf("[FirewallExecutor] Added %d unique targets to set %s (%s)", len(items), first.SetName, first.Backend)
 		}
 
-		first := items[0]
-		e.log.Debugf("[FirewallExecutor] Added %d unique targets to set %s (%s)", len(items), first.SetName, first.Backend)
+		for _, pending := range pendingItems {
+			for _, completion := range pending.completions {
+				e.notifyCompletion(completion, err)
+			}
+		}
 	}
+}
+
+func (e *Executor) notifyCompletion(completion completionFunc, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			e.log.Errorf("[FirewallExecutor] completion callback panicked: %v", recovered)
+		}
+	}()
+	completion(err)
 }
 
 func batchKey(target BypassTarget) string {

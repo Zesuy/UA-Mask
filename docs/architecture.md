@@ -424,7 +424,7 @@ flowchart LR
     Dispatcher --> Offload[offload.Coordinator]
 ```
 
-运行中 `Dispatcher.Append(event)` 会把事件放入队列，由后台 worker 依次分发给 sink。未启动时则同步分发，便于测试。
+运行中 `Dispatcher.Append(event)` 会把事件放入固定容量的环形队列，由后台 worker 依次分发给 sink。队列满时拒绝最新事件并累计 `Dropped()` 计数，防止慢 sink 导致内存无限增长；`Stop()` 只排空调用时已经入队的事件，停止边界之后产生的新事件会被拒绝，确保关闭过程有限；未启动时则同步分发，便于测试。
 
 ## 9. 状态画像与策略
 
@@ -464,6 +464,8 @@ flowchart TD
 - HTTP 请求命中防火墙 UA 白名单，并产生 `EventRewriteSkipped` + `FirewallHit=true`。
 - 非 HTTP 目标达到阈值，且经过 `DecisionDelay` 后仍不处于 HTTP cooldown。
 
+两条路径的开关彼此独立：UA 防火墙白名单始终可产生目标卸载信号，`-fw-bypass` 只控制非 HTTP 画像与策略。
+
 ## 10. 流量卸载管线
 
 `offload.Coordinator` 同时扮演两个角色：
@@ -497,12 +499,14 @@ sequenceDiagram
     end
 
     Policy-->>Coord: SignalTryTargetOffload
-    Coord->>Executor: TryEnqueue(BypassTarget)
+    Coord->>Executor: TryEnqueue(BypassTarget, completion)
     Executor->>FW: 批量写入 set
+    FW-->>Executor: 实际执行结果
+    Executor-->>Coord: completion(error)
     Coord->>Events: EventTargetOffloadSucceeded 或 Failed
 ```
 
-`offload.FirewallTargetOffloader` 只做一件事：把 `model.OffloadSignal` 转成 `firewall.BypassTarget`，然后投递给 `firewall.Executor`。
+`offload.FirewallTargetOffloader` 把 `model.OffloadSignal` 转成 `firewall.BypassTarget` 并投递给 `firewall.Executor`。Coordinator 只在 Executor 的批处理命令实际完成后发出成功或失败事实；单纯进入队列不会再被视为卸载成功。
 
 `NoopFlowOffloader` 当前是空实现，说明代码模型里预留了“单连接级 flow offload”的概念，但当前实际起作用的是目标级 `IP:Port` offload。
 

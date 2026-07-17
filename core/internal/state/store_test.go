@@ -11,6 +11,7 @@ func TestStoreAggregatesFactsIntoProfile(t *testing.T) {
 	t.Parallel()
 
 	store := NewStore(Config{
+		NonHTTPEnabled:         true,
 		NonHTTPThreshold:       2,
 		HTTPCooldownPeriod:     30 * time.Second,
 		DecisionDelay:          5 * time.Second,
@@ -60,5 +61,27 @@ func TestStoreAggregatesFactsIntoProfile(t *testing.T) {
 	}
 	if afterHTTP.HTTPCooldownUntil.IsZero() {
 		t.Fatalf("expected HTTP cooldown to be set")
+	}
+}
+
+func TestStoreDoesNotScheduleNonHTTPWhenFeatureIsDisabled(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(Config{
+		NonHTTPEnabled:         false,
+		NonHTTPThreshold:       1,
+		DecisionDelay:          time.Second,
+		ProfileCleanupInterval: time.Minute,
+	})
+	target := model.Target{IP: "1.1.1.1", Port: 80}
+	store.Append(model.SessionEvent{
+		Type:      model.EventNonHTTPObserved,
+		Target:    target,
+		Timestamp: time.Now(),
+	})
+
+	snapshot := store.Snapshot(target)
+	if snapshot.NonHTTPScore != 0 || !snapshot.PendingTargetOffloadAt.IsZero() {
+		t.Fatalf("expected disabled non-http aggregation to stay idle, got %+v", snapshot)
 	}
 }

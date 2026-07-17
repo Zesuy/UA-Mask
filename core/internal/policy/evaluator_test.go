@@ -61,7 +61,7 @@ func TestEvaluateTargetUsesSnapshotOnly(t *testing.T) {
 	nowFunc = func() time.Time { return time.Unix(100, 0) }
 	defer func() { nowFunc = originalNow }()
 
-	evaluator := NewTargetPolicy(60, 3600, 2)
+	evaluator := NewTargetPolicy(60, 3600, 2, true)
 	target := model.Target{IP: "1.1.1.1", Port: 80}
 
 	whitelistSignal := evaluator.Evaluate(model.ProfileSnapshot{
@@ -92,6 +92,33 @@ func TestEvaluateTargetUsesSnapshotOnly(t *testing.T) {
 	})
 	if noAction.Kind != model.SignalNoAction {
 		t.Fatalf("expected no action for immature snapshot, got %s", noAction.Kind)
+	}
+}
+
+func TestEvaluateTargetKeepsWhitelistEnabledWhenNonHTTPBypassIsDisabled(t *testing.T) {
+	t.Parallel()
+
+	evaluator := NewTargetPolicy(60, 3600, 2, false)
+	target := model.Target{IP: "1.1.1.1", Port: 80}
+
+	whitelistSignal := evaluator.Evaluate(model.ProfileSnapshot{
+		Found:           true,
+		Target:          target,
+		LastEventType:   model.EventRewriteSkipped,
+		LastFirewallHit: true,
+	})
+	if whitelistSignal.Kind != model.SignalTryTargetOffload {
+		t.Fatalf("expected whitelist offload to remain enabled, got %s", whitelistSignal.Kind)
+	}
+
+	nonHTTPSignal := evaluator.Evaluate(model.ProfileSnapshot{
+		Found:                  true,
+		Target:                 target,
+		NonHTTPScore:           2,
+		PendingTargetOffloadAt: time.Now().Add(-time.Second),
+	})
+	if nonHTTPSignal.Kind != model.SignalNoAction {
+		t.Fatalf("expected non-http offload to be disabled, got %s", nonHTTPSignal.Kind)
 	}
 }
 

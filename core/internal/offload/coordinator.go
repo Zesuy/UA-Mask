@@ -18,7 +18,11 @@ type FlowOffloader interface {
 }
 
 type TargetOffloader interface {
-	Handle(signal model.OffloadSignal) error
+	Handle(signal model.OffloadSignal, completion func(error)) error
+}
+
+type targetTimer struct {
+	timer *time.Timer
 }
 
 type Coordinator struct {
@@ -30,7 +34,11 @@ type Coordinator struct {
 	events          *events.Dispatcher
 
 	mu           sync.Mutex
-	targetTimers map[string]*time.Timer
+	targetTimers map[string]*targetTimer
+	inFlight     map[string]struct{}
+	stopped      bool
+	timerWG      sync.WaitGroup
+	activeWG     sync.WaitGroup
 }
 
 func NewCoordinator(
@@ -48,24 +56,33 @@ func NewCoordinator(
 		targetOffloader: targetOffloader,
 		flowOffloader:   flowOffloader,
 		events:          dispatcher,
-		targetTimers:    make(map[string]*time.Timer),
+		targetTimers:    make(map[string]*targetTimer),
+		inFlight:        make(map[string]struct{}),
 	}
 }
 
 func (c *Coordinator) Append(event model.SessionEvent) {
 	switch event.Type {
 	case model.EventNonHTTPObserved, model.EventHTTPRequestObserved, model.EventRewriteSkipped:
+		if c.isStopped() {
+			return
+		}
 		c.observeTargetEvent(event)
+	case model.EventTargetOffloadSucceeded, model.EventTargetOffloadFailed:
+		c.clearTargetInFlight(event.Target)
 	case model.EventSessionClosed, model.EventRewriteApplied,
 		model.EventSessionOpened, model.EventUpstreamConnected, model.EventProtocolClassified,
 		model.EventSessionForwardFallback, model.EventFlowOffloadSucceeded,
-		model.EventFlowOffloadFailed, model.EventTargetOffloadSucceeded,
-		model.EventTargetOffloadFailed:
+		model.EventFlowOffloadFailed:
 		return
 	}
 }
 
 func (c *Coordinator) Handle(signal model.OffloadSignal) {
+	if !c.beginOperation() {
+		return
+	}
+	defer c.activeWG.Done()
 	switch signal.Kind {
 	case model.SignalTryFlowOffload:
 		c.handleFlowSignal(signal)
@@ -78,12 +95,20 @@ func (c *Coordinator) Handle(signal model.OffloadSignal) {
 
 func (c *Coordinator) Stop() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for key, timer := range c.targetTimers {
-		timer.Stop()
+	if c.stopped {
+		c.mu.Unlock()
+		c.timerWG.Wait()
+		c.activeWG.Wait()
+		return
+	}
+	c.stopped = true
+	for key, scheduled := range c.targetTimers {
+		scheduled.timer.Stop()
 		delete(c.targetTimers, key)
 	}
+	c.mu.Unlock()
+	c.timerWG.Wait()
+	c.activeWG.Wait()
 }
 
 func (c *Coordinator) observeTargetEvent(event model.SessionEvent) {
@@ -117,20 +142,32 @@ func (c *Coordinator) scheduleTargetEvaluation(snapshot model.ProfileSnapshot) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if timer, ok := c.targetTimers[key]; ok {
-		timer.Stop()
+	if c.stopped {
+		return
 	}
 
-	c.targetTimers[key] = time.AfterFunc(delay, func() {
+	if scheduled, ok := c.targetTimers[key]; ok {
+		scheduled.timer.Stop()
+	}
+
+	scheduled := &targetTimer{}
+	scheduled.timer = time.AfterFunc(delay, func() {
+		c.mu.Lock()
+		current, ok := c.targetTimers[key]
+		if !ok || current != scheduled || c.stopped {
+			c.mu.Unlock()
+			return
+		}
+		delete(c.targetTimers, key)
+		c.timerWG.Add(1)
+		c.mu.Unlock()
+		defer c.timerWG.Done()
+
 		latest := c.profiles.Snapshot(snapshot.Target)
 		signal := c.targetEvaluator.Evaluate(latest)
 		c.Handle(signal)
-
-		c.mu.Lock()
-		delete(c.targetTimers, key)
-		c.mu.Unlock()
 	})
+	c.targetTimers[key] = scheduled
 }
 
 func (c *Coordinator) cancelTargetTimer(target model.Target) {
@@ -139,8 +176,8 @@ func (c *Coordinator) cancelTargetTimer(target model.Target) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if timer, ok := c.targetTimers[key]; ok {
-		timer.Stop()
+	if scheduled, ok := c.targetTimers[key]; ok {
+		scheduled.timer.Stop()
 		delete(c.targetTimers, key)
 	}
 }
@@ -174,35 +211,85 @@ func (c *Coordinator) handleTargetSignal(signal model.OffloadSignal) {
 	if signal.Kind == model.SignalNoAction || c.targetOffloader == nil {
 		return
 	}
-
-	if err := c.targetOffloader.Handle(signal); err != nil {
-		c.log.Debugf("[Offload] target signal failed for %s: %v", signal.Target.Address, err)
-		c.emit(model.SessionEvent{
-			Type:      model.EventTargetOffloadFailed,
-			SessionID: signal.SessionID,
-			Target:    signal.Target,
-			Reason:    err.Error(),
-			Timeout:   signal.Timeout,
-			Timestamp: time.Now(),
-		})
+	if !c.markTargetInFlight(signal.Target) {
 		return
 	}
 
-	c.emit(model.SessionEvent{
+	var once sync.Once
+	complete := func(err error) {
+		once.Do(func() {
+			c.completeTargetSignal(signal, err)
+		})
+	}
+	if err := c.targetOffloader.Handle(signal, complete); err != nil {
+		complete(err)
+	}
+}
+
+func (c *Coordinator) completeTargetSignal(signal model.OffloadSignal, err error) {
+	event := model.SessionEvent{
 		Type:      model.EventTargetOffloadSucceeded,
 		SessionID: signal.SessionID,
 		Target:    signal.Target,
 		Reason:    signal.Reason,
 		Timeout:   signal.Timeout,
 		Timestamp: time.Now(),
-	})
+	}
+	if err != nil {
+		c.log.Debugf("[Offload] target signal failed for %s: %v", signal.Target.Address, err)
+		event.Type = model.EventTargetOffloadFailed
+		event.Reason = err.Error()
+	}
+	if !c.emit(event) {
+		c.clearTargetInFlight(signal.Target)
+	}
 }
 
-func (c *Coordinator) emit(event model.SessionEvent) {
-	if c.events == nil {
-		return
+func (c *Coordinator) markTargetInFlight(target model.Target) bool {
+	key := targetKey(target)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stopped {
+		return false
 	}
-	c.events.Append(event)
+	if _, exists := c.inFlight[key]; exists {
+		return false
+	}
+	c.inFlight[key] = struct{}{}
+	return true
+}
+
+func (c *Coordinator) isStopped() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stopped
+}
+
+func (c *Coordinator) beginOperation() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stopped {
+		return false
+	}
+	c.activeWG.Add(1)
+	return true
+}
+
+func (c *Coordinator) clearTargetInFlight(target model.Target) {
+	c.mu.Lock()
+	delete(c.inFlight, targetKey(target))
+	c.mu.Unlock()
+}
+
+func (c *Coordinator) emit(event model.SessionEvent) bool {
+	if c.events == nil {
+		return false
+	}
+	if !c.events.TryAppend(event) {
+		c.log.Warnf("[Offload] event queue full, dropping %s for %s", event.Type, event.Target.Address)
+		return false
+	}
+	return true
 }
 
 func targetKey(target model.Target) string {

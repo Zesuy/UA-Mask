@@ -66,13 +66,15 @@ type TargetPolicy struct {
 	targetOffloadTimeout    int
 	whitelistOffloadTimeout int
 	nonHTTPThreshold        int
+	nonHTTPEnabled          bool
 }
 
-func NewTargetPolicy(targetOffloadTimeout int, whitelistOffloadTimeout int, nonHTTPThreshold int) *TargetPolicy {
+func NewTargetPolicy(targetOffloadTimeout int, whitelistOffloadTimeout int, nonHTTPThreshold int, nonHTTPEnabled bool) *TargetPolicy {
 	return &TargetPolicy{
 		targetOffloadTimeout:    targetOffloadTimeout,
 		whitelistOffloadTimeout: whitelistOffloadTimeout,
 		nonHTTPThreshold:        nonHTTPThreshold,
+		nonHTTPEnabled:          nonHTTPEnabled,
 	}
 }
 
@@ -95,7 +97,8 @@ func (p *TargetPolicy) Evaluate(snapshot model.ProfileSnapshot) model.OffloadSig
 		}
 	}
 
-	if !snapshot.PendingTargetOffloadAt.IsZero() &&
+	if p.nonHTTPEnabled &&
+		!snapshot.PendingTargetOffloadAt.IsZero() &&
 		!now.Before(snapshot.PendingTargetOffloadAt) &&
 		(snapshot.HTTPCooldownUntil.IsZero() || !now.Before(snapshot.HTTPCooldownUntil)) &&
 		snapshot.NonHTTPScore >= p.nonHTTPThreshold {

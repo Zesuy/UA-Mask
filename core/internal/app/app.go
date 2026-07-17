@@ -68,22 +68,21 @@ func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {
 	requestRewriter := rewrite.NewRequestRewriter(ruleEngine, cache)
 
 	profileStore := state.NewStore(state.Config{
+		NonHTTPEnabled:         cfg.Firewall.EnableBypass,
 		NonHTTPThreshold:       cfg.Firewall.NonHTTPThreshold,
 		HTTPCooldownPeriod:     cfg.Firewall.HTTPCooldownPeriod,
 		DecisionDelay:          cfg.Firewall.DecisionDelay,
 		ProfileCleanupInterval: cfg.Firewall.ProfileCleanupInterval,
 	})
 
-	var targetOffloader offload.TargetOffloader
-	if cfg.Firewall.EnableBypass {
-		targetOffloader = offload.NewFirewallTargetOffloader(firewallExecutor, cfg.Firewall.SetName, cfg.Firewall.Backend)
-	}
+	targetOffloader := offload.NewFirewallTargetOffloader(firewallExecutor, cfg.Firewall.SetName, cfg.Firewall.Backend)
 
 	sessionPolicy := policy.NewSessionPolicy()
 	targetPolicy := policy.NewTargetPolicy(
 		cfg.Firewall.Timeout,
 		cfg.Firewall.ImmediateBypassTimeout,
 		cfg.Firewall.NonHTTPThreshold,
+		cfg.Firewall.EnableBypass,
 	)
 	dispatcher := events.NewDispatcher()
 	offloadCoordinator := offload.NewCoordinator(
@@ -120,17 +119,18 @@ func (r *Runtime) Run() error {
 	r.config.LogConfig(r.version)
 
 	r.firewallExecutor.Start()
-	defer r.firewallExecutor.Stop()
-
 	r.profileStore.Start()
-	defer r.profileStore.Stop()
 	r.statsReporter.Start()
-	defer r.statsReporter.Stop()
 	r.dispatcher.Start()
-	defer r.dispatcher.Stop()
-	if r.offload != nil {
-		defer r.offload.Stop()
-	}
+	defer func() {
+		if r.offload != nil {
+			r.offload.Stop()
+		}
+		r.firewallExecutor.Stop()
+		r.dispatcher.Stop()
+		r.statsReporter.Stop()
+		r.profileStore.Stop()
+	}()
 
 	return r.server.Run()
 }

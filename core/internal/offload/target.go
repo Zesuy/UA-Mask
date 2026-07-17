@@ -21,18 +21,18 @@ func NewFirewallTargetOffloader(executor *firewall.Executor, setName, backend st
 	}
 }
 
-func (o *FirewallTargetOffloader) Handle(signal model.OffloadSignal) error {
+func (o *FirewallTargetOffloader) Handle(signal model.OffloadSignal, completion func(error)) error {
 	if o == nil || o.executor == nil {
 		return fmt.Errorf("target offloader not configured")
 	}
 
-	ok := o.executor.TryEnqueue(firewall.BypassTarget{
+	ok := o.executor.TryEnqueueWithResult(firewall.BypassTarget{
 		IP:      signal.Target.IP,
 		Port:    signal.Target.Port,
 		SetName: o.setName,
 		Backend: o.backend,
 		Timeout: signal.Timeout,
-	})
+	}, completion)
 	if !ok {
 		return fmt.Errorf("enqueue target offload failed")
 	}

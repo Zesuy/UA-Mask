@@ -17,6 +17,7 @@ type ProfileStore interface {
 }
 
 type Config struct {
+	NonHTTPEnabled         bool
 	NonHTTPThreshold       int
 	HTTPCooldownPeriod     time.Duration
 	DecisionDelay          time.Duration
@@ -193,6 +194,9 @@ func (s *Store) applyHTTPObservation(profile *model.TargetProfile, now time.Time
 }
 
 func (s *Store) applyNonHTTPObservation(profile *model.TargetProfile, now time.Time) {
+	if !s.config.NonHTTPEnabled {
+		return
+	}
 	if now.Before(profile.HTTPCooldownUntil) {
 		return
 	}
