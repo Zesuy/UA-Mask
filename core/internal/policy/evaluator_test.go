@@ -6,25 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"UAmask/internal/config"
 	"UAmask/internal/model"
-	"UAmask/internal/rewrite"
 )
 
-func TestEvaluateSessionRewritesAndTracksCounters(t *testing.T) {
+func TestEvaluateSessionUsesRewriteInputWithoutSideEffects(t *testing.T) {
 	t.Parallel()
 
-	engine := rewrite.NewEngine(
-		config.RewriteConfig{UserAgent: "MaskUA", ForceReplace: true},
-		config.RewriteRuntimeConfig{},
-		config.FirewallConfig{},
-	)
-	cache, err := rewrite.NewUACache(16)
-	if err != nil {
-		t.Fatalf("new cache: %v", err)
-	}
-
-	evaluator := NewSessionPolicy(rewrite.NewRequestRewriter(engine, cache))
+	evaluator := NewSessionPolicy()
 	sessionState := &model.SessionState{Target: model.Target{IP: "1.1.1.1", Port: 80}}
 	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
 	if err != nil {
@@ -33,9 +21,14 @@ func TestEvaluateSessionRewritesAndTracksCounters(t *testing.T) {
 	req.Header.Set("User-Agent", "Original")
 
 	decision := evaluator.Evaluate(sessionState, model.SessionInput{
-		Kind:     model.SessionInputRequest,
-		Protocol: model.ProtocolHTTP,
-		Request:  req,
+		Kind:           model.SessionInputRequest,
+		Protocol:       model.ProtocolHTTP,
+		Request:        req,
+		Modified:       true,
+		FromCache:      true,
+		Reason:         "rewrite input",
+		FirewallHit:    true,
+		DropConnection: false,
 	}, model.ProfileSnapshot{})
 
 	if decision.Action != model.ActionContinue {
@@ -44,11 +37,20 @@ func TestEvaluateSessionRewritesAndTracksCounters(t *testing.T) {
 	if !decision.Modified {
 		t.Fatalf("expected modified request")
 	}
-	if got := req.Header.Get("User-Agent"); got != "MaskUA" {
-		t.Fatalf("expected rewritten UA, got %q", got)
+	if !decision.FromCache {
+		t.Fatalf("expected cache flag to be propagated")
 	}
-	if sessionState.ConsecutiveRewrite != 1 || sessionState.ConsecutiveNoRewrite != 0 {
-		t.Fatalf("unexpected session counters: %+v", sessionState)
+	if got := decision.Reason; got != "rewrite input" {
+		t.Fatalf("expected rewrite reason, got %q", got)
+	}
+	if !decision.FirewallHit {
+		t.Fatalf("expected firewall hit flag to be propagated")
+	}
+	if got := req.Header.Get("User-Agent"); got != "Original" {
+		t.Fatalf("policy must not rewrite UA, got %q", got)
+	}
+	if sessionState.ConsecutiveRewrite != 0 || sessionState.ConsecutiveNoRewrite != 0 {
+		t.Fatalf("policy must not mutate session counters: %+v", sessionState)
 	}
 }
 
@@ -63,10 +65,10 @@ func TestEvaluateTargetUsesSnapshotOnly(t *testing.T) {
 	target := model.Target{IP: "1.1.1.1", Port: 80}
 
 	whitelistSignal := evaluator.Evaluate(model.ProfileSnapshot{
-		Found:         true,
-		Target:        target,
-		LastEventType: model.EventRewriteSkipped,
-		LastReason:    string(rewrite.ReasonFirewallWhitelist),
+		Found:           true,
+		Target:          target,
+		LastEventType:   model.EventRewriteSkipped,
+		LastFirewallHit: true,
 	})
 	if whitelistSignal.Kind != model.SignalTryTargetOffload {
 		t.Fatalf("expected whitelist snapshot to trigger offload, got %s", whitelistSignal.Kind)
@@ -96,10 +98,7 @@ func TestEvaluateTargetUsesSnapshotOnly(t *testing.T) {
 func TestEvaluateSessionNonHTTPPassthrough(t *testing.T) {
 	t.Parallel()
 
-	evaluator := NewSessionPolicy(rewrite.NewRequestRewriter(
-		rewrite.NewEngine(config.RewriteConfig{}, config.RewriteRuntimeConfig{}, config.FirewallConfig{}),
-		&rewrite.UACache{},
-	))
+	evaluator := NewSessionPolicy()
 	sessionState := &model.SessionState{}
 
 	decision := evaluator.Evaluate(sessionState, model.SessionInput{

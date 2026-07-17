@@ -13,8 +13,8 @@ import (
 	"UAmask/internal/config"
 	"UAmask/internal/events"
 	"UAmask/internal/model"
-	"UAmask/internal/offload"
 	"UAmask/internal/policy"
+	"UAmask/internal/rewrite"
 	"UAmask/internal/state"
 
 	"github.com/sirupsen/logrus"
@@ -26,11 +26,16 @@ type Manager interface {
 	Handle(accepted *model.AcceptedSession)
 }
 
+type SignalHandler interface {
+	Handle(signal model.OffloadSignal)
+}
+
 type DefaultManager struct {
 	config       config.ListenConfig
 	evaluator    policy.SessionEvaluator
+	rewriter     *rewrite.RequestRewriter
 	profiles     state.ProfileStore
-	offload      *offload.Coordinator
+	offload      SignalHandler
 	events       *events.Dispatcher
 	readerPool   sync.Pool
 	writerPool   sync.Pool
@@ -40,15 +45,17 @@ type DefaultManager struct {
 func NewManager(
 	cfg config.ListenConfig,
 	evaluator policy.SessionEvaluator,
+	rewriter *rewrite.RequestRewriter,
 	profiles state.ProfileStore,
-	coordinator *offload.Coordinator,
+	offload SignalHandler,
 	dispatcher *events.Dispatcher,
 ) *DefaultManager {
 	manager := &DefaultManager{
 		config:    cfg,
 		evaluator: evaluator,
+		rewriter:  rewriter,
 		profiles:  profiles,
-		offload:   coordinator,
+		offload:   offload,
 		events:    dispatcher,
 	}
 
@@ -235,12 +242,19 @@ func (m *DefaultManager) processRequest(sessionState *model.SessionState, srcRea
 		Timestamp:   time.Now(),
 	})
 
+	rewriteResult := m.rewriteRequest(request, sessionState.Target)
 	snapshot := m.profiles.Snapshot(sessionState.Target)
 	decision := m.evaluator.Evaluate(sessionState, model.SessionInput{
-		Kind:     model.SessionInputRequest,
-		Protocol: model.ProtocolHTTP,
-		Request:  request,
+		Kind:           model.SessionInputRequest,
+		Protocol:       model.ProtocolHTTP,
+		Request:        request,
+		Modified:       rewriteResult.Modified,
+		FromCache:      rewriteResult.FromCache,
+		Reason:         string(rewriteResult.Decision.Reason),
+		FirewallHit:    rewriteResult.Decision.FirewallBypassHit,
+		DropConnection: rewriteResult.Decision.DropConnection,
 	}, snapshot)
+	m.updateRewriteCounters(sessionState, decision.Modified)
 
 	m.emit(model.SessionEvent{
 		Type:        model.EventHTTPRequestObserved,
@@ -264,6 +278,7 @@ func (m *DefaultManager) processRequest(sessionState *model.SessionState, srcRea
 		Reason:      decision.Reason,
 		Modified:    decision.Modified,
 		FromCache:   decision.FromCache,
+		FirewallHit: decision.FirewallHit,
 		Timestamp:   time.Now(),
 	})
 
@@ -311,6 +326,24 @@ func (m *DefaultManager) emit(event model.SessionEvent) {
 		return
 	}
 	m.events.Append(event)
+}
+
+func (m *DefaultManager) rewriteRequest(request *http.Request, target model.Target) rewrite.Result {
+	if m.rewriter == nil {
+		return rewrite.Result{}
+	}
+	return m.rewriter.Rewrite(request, target.IP, target.Port)
+}
+
+func (m *DefaultManager) updateRewriteCounters(sessionState *model.SessionState, modified bool) {
+	if modified {
+		sessionState.ConsecutiveRewrite++
+		sessionState.ConsecutiveNoRewrite = 0
+		return
+	}
+
+	sessionState.ConsecutiveNoRewrite++
+	sessionState.ConsecutiveRewrite = 0
 }
 
 func isHTTP(reader *bufio.Reader) (bool, error) {

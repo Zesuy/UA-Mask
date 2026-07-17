@@ -27,6 +27,7 @@ type Runtime struct {
 	statsReporter    *stats.FileReporter
 	profileStore     *state.Store
 	firewallExecutor *firewall.Executor
+	dispatcher       *events.Dispatcher
 	offload          *offload.Coordinator
 	server           *proxy.Server
 }
@@ -78,7 +79,7 @@ func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {
 		targetOffloader = offload.NewFirewallTargetOffloader(firewallExecutor, cfg.Firewall.SetName, cfg.Firewall.Backend)
 	}
 
-	sessionPolicy := policy.NewSessionPolicy(requestRewriter)
+	sessionPolicy := policy.NewSessionPolicy()
 	targetPolicy := policy.NewTargetPolicy(
 		cfg.Firewall.Timeout,
 		cfg.Firewall.ImmediateBypassTimeout,
@@ -95,7 +96,7 @@ func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {
 	)
 	dispatcher.Add(profileStore, appStats, offloadCoordinator)
 
-	sessionManager := session.NewManager(cfg.Listen, sessionPolicy, profileStore, offloadCoordinator, dispatcher)
+	sessionManager := session.NewManager(cfg.Listen, sessionPolicy, requestRewriter, profileStore, offloadCoordinator, dispatcher)
 	redirectIngress, err := ingress.NewRedirect(cfg.Listen)
 	if err != nil {
 		return nil, err
@@ -109,6 +110,7 @@ func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {
 		statsReporter:    statsReporter,
 		profileStore:     profileStore,
 		firewallExecutor: firewallExecutor,
+		dispatcher:       dispatcher,
 		offload:          offloadCoordinator,
 		server:           server,
 	}, nil
@@ -124,6 +126,8 @@ func (r *Runtime) Run() error {
 	defer r.profileStore.Stop()
 	r.statsReporter.Start()
 	defer r.statsReporter.Stop()
+	r.dispatcher.Start()
+	defer r.dispatcher.Stop()
 	if r.offload != nil {
 		defer r.offload.Stop()
 	}

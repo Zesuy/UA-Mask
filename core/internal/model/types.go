@@ -81,6 +81,7 @@ type SessionEvent struct {
 	Reason      string
 	Modified    bool
 	FromCache   bool
+	FirewallHit bool
 	Timeout     int
 	Timestamp   time.Time
 }
@@ -93,6 +94,7 @@ type TargetProfile struct {
 	PendingTargetOffloadAt time.Time
 	TargetOffloadUntil     time.Time
 	FirewallWhitelistHits  int
+	LastFirewallHit        bool
 	LastEventType          SessionEventType
 	LastReason             string
 }
@@ -106,6 +108,7 @@ type ProfileSnapshot struct {
 	PendingTargetOffloadAt time.Time
 	TargetOffloadUntil     time.Time
 	FirewallWhitelistHits  int
+	LastFirewallHit        bool
 	LastEventType          SessionEventType
 	LastReason             string
 }
@@ -118,9 +121,14 @@ const (
 )
 
 type SessionInput struct {
-	Kind     SessionInputKind
-	Protocol ProtocolKind
-	Request  *http.Request
+	Kind           SessionInputKind
+	Protocol       ProtocolKind
+	Request        *http.Request
+	Modified       bool
+	FromCache      bool
+	Reason         string
+	FirewallHit    bool
+	DropConnection bool
 }
 
 type ActionKind string
@@ -149,10 +157,11 @@ type OffloadSignal struct {
 }
 
 type PolicyDecision struct {
-	Protocol   ProtocolKind
-	Action     ActionKind
-	Modified   bool
-	FromCache  bool
-	Reason     string
-	FlowSignal OffloadSignal
+	Protocol    ProtocolKind
+	Action      ActionKind
+	Modified    bool
+	FromCache   bool
+	Reason      string
+	FirewallHit bool
+	FlowSignal  OffloadSignal
 }

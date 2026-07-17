@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"UAmask/internal/model"
-	"UAmask/internal/rewrite"
 )
 
 type SessionEvaluator interface {
@@ -15,12 +14,10 @@ type TargetEvaluator interface {
 	Evaluate(snapshot model.ProfileSnapshot) model.OffloadSignal
 }
 
-type SessionPolicy struct {
-	rewriter *rewrite.RequestRewriter
-}
+type SessionPolicy struct{}
 
-func NewSessionPolicy(rewriter *rewrite.RequestRewriter) *SessionPolicy {
-	return &SessionPolicy{rewriter: rewriter}
+func NewSessionPolicy() *SessionPolicy {
+	return &SessionPolicy{}
 }
 
 func (p *SessionPolicy) Evaluate(session *model.SessionState, input model.SessionInput, _ model.ProfileSnapshot) model.PolicyDecision {
@@ -43,25 +40,17 @@ func (p *SessionPolicy) Evaluate(session *model.SessionState, input model.Sessio
 			}
 		}
 
-		result := p.rewriter.Rewrite(input.Request, session.Target.IP, session.Target.Port)
 		decision := model.PolicyDecision{
-			Protocol:   model.ProtocolHTTP,
-			Action:     model.ActionContinue,
-			Modified:   result.Modified,
-			FromCache:  result.FromCache,
-			Reason:     string(result.Decision.Reason),
-			FlowSignal: model.OffloadSignal{Kind: model.SignalNoAction},
+			Protocol:    model.ProtocolHTTP,
+			Action:      model.ActionContinue,
+			Modified:    input.Modified,
+			FromCache:   input.FromCache,
+			Reason:      input.Reason,
+			FirewallHit: input.FirewallHit,
+			FlowSignal:  model.OffloadSignal{Kind: model.SignalNoAction},
 		}
-		if result.Decision.DropConnection {
+		if input.DropConnection {
 			decision.Action = model.ActionDrop
-		}
-
-		if result.Modified {
-			session.ConsecutiveRewrite++
-			session.ConsecutiveNoRewrite = 0
-		} else {
-			session.ConsecutiveNoRewrite++
-			session.ConsecutiveRewrite = 0
 		}
 
 		return decision
@@ -97,7 +86,7 @@ func (p *TargetPolicy) Evaluate(snapshot model.ProfileSnapshot) model.OffloadSig
 		return model.OffloadSignal{Kind: model.SignalNoAction}
 	}
 
-	if snapshot.LastEventType == model.EventRewriteSkipped && snapshot.LastReason == string(rewrite.ReasonFirewallWhitelist) {
+	if snapshot.LastEventType == model.EventRewriteSkipped && snapshot.LastFirewallHit {
 		return model.OffloadSignal{
 			Kind:    model.SignalTryTargetOffload,
 			Target:  snapshot.Target,

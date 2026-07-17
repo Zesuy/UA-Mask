@@ -86,14 +86,16 @@ func (s *Store) Append(event model.SessionEvent) {
 		profile := s.ensureProfileLocked(event.Target)
 		profile.LastEventType = event.Type
 		profile.LastReason = event.Reason
+		profile.LastFirewallHit = event.FirewallHit
 		profile.LastActivity = now
-		if event.Reason == "Hit Firewall UA Whitelist" {
+		if event.FirewallHit {
 			profile.FirewallWhitelistHits++
 		}
 	case model.EventRewriteApplied:
 		profile := s.ensureProfileLocked(event.Target)
 		profile.LastEventType = event.Type
 		profile.LastReason = event.Reason
+		profile.LastFirewallHit = event.FirewallHit
 		profile.LastActivity = now
 	case model.EventTargetOffloadSucceeded:
 		profile := s.ensureProfileLocked(event.Target)
@@ -135,6 +137,7 @@ func (s *Store) Snapshot(target model.Target) model.ProfileSnapshot {
 		PendingTargetOffloadAt: profile.PendingTargetOffloadAt,
 		TargetOffloadUntil:     profile.TargetOffloadUntil,
 		FirewallWhitelistHits:  profile.FirewallWhitelistHits,
+		LastFirewallHit:        profile.LastFirewallHit,
 		LastEventType:          profile.LastEventType,
 		LastReason:             profile.LastReason,
 	}

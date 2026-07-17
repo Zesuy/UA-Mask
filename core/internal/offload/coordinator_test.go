@@ -79,10 +79,11 @@ func TestCoordinatorUsesSnapshotAndEmitsFacts(t *testing.T) {
 
 	target := model.Target{IP: "1.1.1.1", Port: 80}
 	event := model.SessionEvent{
-		Type:      model.EventRewriteSkipped,
-		Target:    target,
-		Reason:    "Hit Firewall UA Whitelist",
-		Timestamp: time.Now(),
+		Type:        model.EventRewriteSkipped,
+		Target:      target,
+		Reason:      "Hit Firewall UA Whitelist",
+		FirewallHit: true,
+		Timestamp:   time.Now(),
 	}
 
 	profiles.Append(event)

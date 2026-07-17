@@ -39,10 +39,11 @@ func TestStoreAggregatesFactsIntoProfile(t *testing.T) {
 	}
 
 	store.Append(model.SessionEvent{
-		Type:      model.EventRewriteSkipped,
-		Target:    target,
-		Reason:    "Hit Firewall UA Whitelist",
-		Timestamp: now.Add(2 * time.Second),
+		Type:        model.EventRewriteSkipped,
+		Target:      target,
+		Reason:      "Hit Firewall UA Whitelist",
+		FirewallHit: true,
+		Timestamp:   now.Add(2 * time.Second),
 	})
 	third := store.Snapshot(target)
 	if third.FirewallWhitelistHits != 1 {
