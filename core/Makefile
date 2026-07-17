@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: fmt-check vet test cover build ci
+.PHONY: fmt-check vet test cover build shell-check ci
 
 fmt-check:
 	@test -z "$$(find . -name '*.go' -print0 | xargs -0 gofmt -l)" || \
@@ -20,4 +20,11 @@ cover:
 build:
 	$(GO) build ./...
 
-ci: fmt-check vet test build
+shell-check:
+	sh -n ../openwrt/root/etc/init.d/UAmask
+	@test -z "$$(grep -n 'procd_append_param command' ../openwrt/root/etc/init.d/UAmask)" || \
+		(echo "OpenWrt init must launch core through a JSON config file, not business flags."; exit 1)
+	@grep -q 'procd_set_param command "$$PROG" -config "$$CORE_CONFIG_PATH"' ../openwrt/root/etc/init.d/UAmask
+	sh ../openwrt/tests/config-generation-test.sh
+
+ci: fmt-check vet test build shell-check

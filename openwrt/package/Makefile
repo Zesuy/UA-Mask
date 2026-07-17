@@ -32,7 +32,7 @@ define Package/UAmask
 	SUBMENU:=Web Servers/Proxies
 	TITLE:=A transparent proxy for changing User-Agent (nftables)
 	URL:=https://github.com/Zesuy/UA-Mask
-	DEPENDS:=$(GO_ARCH_DEPENDS) +luci-compat 
+	DEPENDS:=$(GO_ARCH_DEPENDS) +luci-compat +libubox
 	CONFLICTS:=ua3f-tproxy ua3f-tproxy-ipt UAmask-ipt
 endef
 

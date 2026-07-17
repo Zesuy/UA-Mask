@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"runtime/debug"
 
 	"UAmask/internal/config"
 	"UAmask/internal/events"
@@ -33,16 +35,36 @@ type Runtime struct {
 }
 
 func Run(version string) error {
-	cfg, err := config.NewFromFlags()
+	command, err := config.NewFromFlags()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	if command.ShowVersion {
+		_, err := fmt.Fprintf(os.Stdout, "UA-Mask version: %s\n", version)
+		return err
+	}
+	if command.DumpEffective {
+		return config.WriteEffective(os.Stdout, command.Config)
+	}
+	if command.CheckConfig {
+		_, err := fmt.Fprintln(os.Stdout, "configuration valid")
+		return err
+	}
+
+	cfg := command.Config
+	if cfg == nil {
+		return fmt.Errorf("configuration is not available")
+	}
+	// Legacy flag-only launches historically left GOGC under the Go runtime and
+	// environment's control. JSON configuration makes GC tuning explicit.
+	if command.ConfigPath != "" {
+		debug.SetGCPercent(cfg.Performance.GCPercent)
+	}
 	setupLogging(cfg.Observe.LogLevel, cfg.Observe.LogFile)
 
-	if cfg.ShowVer {
-		logrus.Infof("UA-Mask version: %s", version)
-		return nil
+	if command.ConfigPath != "" {
+		logrus.Infof("Loaded configuration from %s", command.ConfigPath)
 	}
 
 	runtime, err := NewRuntime(cfg, version)

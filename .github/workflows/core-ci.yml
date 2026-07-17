@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - "core/**"
+      - "openwrt/root/etc/init.d/UAmask"
+      - "openwrt/package/Makefile"
+      - "openwrt/tests/**"
+      - "docs/config.example.json"
       - "go.work"
       - ".github/workflows/core-ci.yml"
   push:
@@ -12,6 +16,10 @@ on:
       - master
     paths:
       - "core/**"
+      - "openwrt/root/etc/init.d/UAmask"
+      - "openwrt/package/Makefile"
+      - "openwrt/tests/**"
+      - "docs/config.example.json"
       - "go.work"
       - ".github/workflows/core-ci.yml"
   workflow_dispatch:
@@ -53,6 +61,9 @@ jobs:
 
       - name: Build
         run: make build
+
+      - name: OpenWrt config transport check
+        run: make shell-check
 
       - name: Coverage summary
         run: |

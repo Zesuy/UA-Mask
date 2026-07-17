@@ -50,7 +50,7 @@ UA-Mask/
 │   ├── cmd/UAmask/             # 进程入口，只调用 app.Run(version)
 │   └── internal/
 │       ├── app/                # 运行时装配与生命周期
-│       ├── config/             # flags 解析、配置建模、运行时预处理
+│       ├── config/             # JSON/legacy flags 加载、默认值、校验与运行时预处理
 │       ├── ingress/            # REDIRECT 监听与原始目标地址恢复
 │       ├── proxy/              # Accept 循环与 worker pool 调度
 │       ├── session/            # 当前热路径中心：协议探测、转发、改写、事件发射
@@ -81,21 +81,24 @@ UA-Mask/
 
 `app.Run()` 做三件事：
 
-1. 调用 `config.NewFromFlags()` 解析命令行参数。
-2. 根据日志配置初始化 logrus。
-3. 调用 `NewRuntime(cfg, version)` 装配所有运行时组件，然后执行 `runtime.Run()`。
+1. 调用 `config.NewFromFlags()` 解析进程参数，并按需加载版本化 JSON。
+2. 按 `defaults -> JSON -> 显式 legacy flags -> normalize -> validate -> compile` 生成最终配置。
+3. 处理 `-v`、`-check-config`、`-dump-effective-config` 等进程动作。
+4. 应用 GC 参数并初始化 logrus。
+5. 调用 `NewRuntime(cfg, version)` 装配所有运行时组件，然后执行 `runtime.Run()`。
 
 ```mermaid
 sequenceDiagram
     participant Main as cmd/UAmask
     participant App as app.Run
-    participant Config as config.NewFromFlags
+    participant Config as config loader
     participant Runtime as app.NewRuntime
     participant Server as proxy.Server
 
     Main->>App: Run(version)
-    App->>Config: 解析 flags
-    Config-->>App: Config
+    App->>Config: 解析进程参数 / 加载 JSON
+    Config->>Config: defaults → normalize → validate → compile
+    Config-->>App: Command + Config
     App->>App: setupLogging()
     App->>Runtime: NewRuntime(cfg, version)
     Runtime-->>App: Runtime
@@ -167,7 +170,7 @@ flowchart TB
 5. 启动 `events.Dispatcher` 事件 worker。
 6. 最后进入 `proxy.Server.Run()` 的 Accept 循环。
 
-停止时通过 `defer` 逆序关闭后台组件。
+停止时按 `offload -> firewall.Executor -> Dispatcher -> stats -> state` 的顺序关闭，确保防火墙实际执行结果能在事件分发器停止前完成投影。
 
 ## 4. 配置模型
 
@@ -176,12 +179,12 @@ flowchart TB
 ```mermaid
 classDiagram
     class Config {
-        +ShowVer bool
         +Listen ListenConfig
         +Rewrite RewriteConfig
         +RewriteRuntime RewriteRuntimeConfig
         +Firewall FirewallConfig
         +Observe ObserveConfig
+        +Performance PerformanceConfig
     }
 
     class ListenConfig {
@@ -229,33 +232,37 @@ classDiagram
         +StatsInterval duration
     }
 
+    class PerformanceConfig {
+        +Profile string
+        +GCPercent int
+    }
+
     Config --> ListenConfig
     Config --> RewriteConfig
     Config --> RewriteRuntimeConfig
     Config --> FirewallConfig
     Config --> ObserveConfig
+    Config --> PerformanceConfig
 ```
 
 `RewriteConfig.Pattern` 保存用户输入语义，`RewriteRuntimeConfig.UARegexp` 保存编译后的正则。这样业务代码只消费已经预处理好的运行时配置。
 
-OpenWrt LuCI/UCI 配置最终会在 `openwrt/root/etc/init.d/UAmask` 里转换成 daemon flags，例如：
+OpenWrt LuCI/UCI 仍然是用户配置的唯一真相源。`openwrt/root/etc/init.d/UAmask` 使用 `jshn.sh` 将 core 所需字段写入 `/var/run/UAmask/config.json`，调用 `UAmask -check-config` 校验后原子替换，再通过以下命令启动：
 
-- `-port`
-- `-u`
-- `-keywords`
-- `-enable-regex`
-- `-force`
-- `-cache-size`
-- `-buffer-size`
-- `-p`
-- `-fw-bypass`
-- `-fw-type`
-- `-fw-set-name`
-- `-fw-ua-w`
-- `-fw-drop`
-- `-fw-nonhttp-threshold`
-- `-fw-timeout`
-- `-fw-decision-delay`
+```sh
+/usr/bin/UAmask -config /var/run/UAmask/config.json
+```
+
+JSON 使用 `schema_version` 做显式版本管理，未知字段会导致加载失败。duration 使用 `30s`、`10m`、`8h` 等字符串，列表使用 JSON 数组。完整示例见 `docs/config.example.json`。
+
+独立运行时支持以下进程级参数：
+
+- `-config <path>`
+- `-check-config`
+- `-dump-effective-config`
+- `-v`
+
+旧业务 flags 暂时作为兼容覆盖层保留；优先级为默认值、JSON、显式 legacy flag。
 
 ## 5. 接入层：ingress 与 proxy
 
@@ -598,7 +605,8 @@ sequenceDiagram
     LuCI->>Init: start / reload / stop
     Init->>Init: detect_firewall()
     Init->>Init: 从 UCI 读取配置
-    Init->>Core: procd 启动并传 flags
+    Init->>Init: 从 UCI 生成并校验 config.json
+    Init->>Core: procd 启动并传 -config
     Init->>FW: 创建 REDIRECT 规则和 bypass set
     Core->>FW: 运行中动态追加绕过目标
     Core->>LuCI: 写 /tmp/UAmask.stats
