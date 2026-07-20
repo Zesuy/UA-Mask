@@ -14,10 +14,25 @@ export PROG="$TMP_DIR/UAmask"
 export TEST_LOG_FILE="$TMP_DIR/log/UAmask.log"
 export NAME="UAmask"
 
+TEST_LOG_OUTPUT="$TMP_DIR/init.log"
+
 (cd "$ROOT/core" && go build -o "$PROG" ./cmd/UAmask)
 
 logger() {
-    :
+    printf '%s\n' "$*" >> "$TEST_LOG_OUTPUT"
+}
+
+preserve_failure_artifacts() {
+    [ -n "${TEST_ARTIFACT_DIR:-}" ] || return 0
+    mkdir -p "$TEST_ARTIFACT_DIR"
+    [ -f "$TEST_LOG_OUTPUT" ] && cp "$TEST_LOG_OUTPUT" "$TEST_ARTIFACT_DIR/procd-contract.log"
+    [ -f "$CORE_CONFIG_PATH" ] && cp "$CORE_CONFIG_PATH" "$TEST_ARTIFACT_DIR/procd-config.json"
+}
+
+fail() {
+    echo "FAIL $1" >&2
+    preserve_failure_artifacts
+    exit 1
 }
 
 config_load() {
@@ -108,18 +123,18 @@ set_firewall() {
 FW_TYPE="nft"
 start_service
 
-[ "$OPEN_INSTANCE" = "UAmask" ] || { echo "FAIL OWRT-PROCD-001 instance name" >&2; exit 1; }
-[ "$COMMAND_PROGRAM" = "$PROG" ] || { echo "FAIL OWRT-PROCD-001 program" >&2; exit 1; }
-[ "$COMMAND_FLAG" = "-config" ] || { echo "FAIL OWRT-PROCD-001 config flag" >&2; exit 1; }
-[ "$COMMAND_CONFIG" = "$CORE_CONFIG_PATH" ] || { echo "FAIL OWRT-PROCD-001 config path" >&2; exit 1; }
-[ "$FILE_PARAM" = "$CORE_CONFIG_PATH" ] || { echo "FAIL OWRT-PROCD-001 file param" >&2; exit 1; }
-[ "$LIMITS_PARAM" = "nofile=65536 65536" ] || { echo "FAIL OWRT-PROCD-001 limits" >&2; exit 1; }
-[ "$RESPAWN_PARAM" -eq 1 ] || { echo "FAIL OWRT-PROCD-001 respawn" >&2; exit 1; }
-[ "$STDOUT_PARAM" = "1" ] || { echo "FAIL OWRT-PROCD-001 stdout" >&2; exit 1; }
-[ "$STDERR_PARAM" = "1" ] || { echo "FAIL OWRT-PROCD-001 stderr" >&2; exit 1; }
-[ "$CLOSED_INSTANCE" -eq 1 ] || { echo "FAIL OWRT-PROCD-001 close" >&2; exit 1; }
-[ "$FIREWALL_SET" -eq 1 ] || { echo "FAIL OWRT-PROCD-001 firewall" >&2; exit 1; }
-[ -f "$CORE_CONFIG_PATH" ] || { echo "FAIL OWRT-PROCD-001 generated config" >&2; exit 1; }
+[ "$OPEN_INSTANCE" = "UAmask" ] || fail "OWRT-PROCD-001 instance name"
+[ "$COMMAND_PROGRAM" = "$PROG" ] || fail "OWRT-PROCD-001 program"
+[ "$COMMAND_FLAG" = "-config" ] || fail "OWRT-PROCD-001 config flag"
+[ "$COMMAND_CONFIG" = "$CORE_CONFIG_PATH" ] || fail "OWRT-PROCD-001 config path"
+[ "$FILE_PARAM" = "$CORE_CONFIG_PATH" ] || fail "OWRT-PROCD-001 file param"
+[ "$LIMITS_PARAM" = "nofile=65536 65536" ] || fail "OWRT-PROCD-001 limits"
+[ "$RESPAWN_PARAM" -eq 1 ] || fail "OWRT-PROCD-001 respawn"
+[ "$STDOUT_PARAM" = "1" ] || fail "OWRT-PROCD-001 stdout"
+[ "$STDERR_PARAM" = "1" ] || fail "OWRT-PROCD-001 stderr"
+[ "$CLOSED_INSTANCE" -eq 1 ] || fail "OWRT-PROCD-001 close"
+[ "$FIREWALL_SET" -eq 1 ] || fail "OWRT-PROCD-001 firewall"
+[ -f "$CORE_CONFIG_PATH" ] || fail "OWRT-PROCD-001 generated config"
 
-"$PROG" -check-config -config "$CORE_CONFIG_PATH" >/dev/null
+"$PROG" -check-config -config "$CORE_CONFIG_PATH" >/dev/null || fail "OWRT-PROCD-001 generated config validation"
 echo "PASS OWRT-PROCD-001 start_service contract"

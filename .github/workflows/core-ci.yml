@@ -5,6 +5,8 @@ on:
     paths:
       - "core/**"
       - "openwrt/root/etc/init.d/UAmask"
+      - "openwrt/root/etc/config/**"
+      - "openwrt/luci/**"
       - "openwrt/package/Makefile"
       - "openwrt/tests/**"
       - "docs/config.example.json"
@@ -17,6 +19,8 @@ on:
     paths:
       - "core/**"
       - "openwrt/root/etc/init.d/UAmask"
+      - "openwrt/root/etc/config/**"
+      - "openwrt/luci/**"
       - "openwrt/package/Makefile"
       - "openwrt/tests/**"
       - "docs/config.example.json"
@@ -57,13 +61,43 @@ jobs:
         run: make vet
 
       - name: Unit tests with coverage
-        run: go test -covermode=atomic -coverprofile=coverage.out ./...
+        run: |
+          set -o pipefail
+          go test -json -covermode=atomic -coverprofile=coverage.out ./... | tee test-results.json
+
+      - name: Race tests
+        run: go test -race -count=1 ./...
 
       - name: Build
         run: make build
 
       - name: OpenWrt config transport check
         run: make shell-check
+        env:
+          TEST_ARTIFACT_DIR: ${{ github.workspace }}/core/test-artifacts/openwrt
+
+      - name: BUILD-TRACE-001 Record test metadata
+        if: always()
+        run: |
+          python3 - "$GITHUB_SHA" "$(go version)" "$(go env GOOS)" "$(go env GOARCH)" <<'PY' > test-metadata.json
+          import json
+          import pathlib
+          import re
+          import sys
+
+          source = pathlib.Path("internal/config/config.go").read_text(encoding="utf-8")
+          match = re.search(r"(?m)^const SchemaVersion = ([0-9]+)$", source)
+          if match is None:
+              raise SystemExit("config schema version constant not found")
+          json.dump({
+              "commit": sys.argv[1],
+              "go_version": sys.argv[2],
+              "goos": sys.argv[3],
+              "goarch": sys.argv[4],
+              "config_schema_version": int(match.group(1)),
+          }, sys.stdout, indent=2)
+          sys.stdout.write("\n")
+          PY
 
       - name: Coverage summary
         run: |
@@ -75,13 +109,18 @@ jobs:
           echo "$total_line" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload coverage artifact
+      - name: Upload test evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-coverage
+          name: core-test-evidence
+          if-no-files-found: warn
           path: |
+            core/test-results.json
             core/coverage.out
             core/coverage.txt
+            core/test-metadata.json
+            core/test-artifacts/**
 
       - name: Build linux amd64 binary
         run: |
