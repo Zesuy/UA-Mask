@@ -16,16 +16,24 @@ import (
 )
 
 type targetOffloaderStub struct {
-	mu      sync.Mutex
-	signals []model.OffloadSignal
-	result  error
+	mu        sync.Mutex
+	signals   []model.OffloadSignal
+	result    error
+	handled   chan model.OffloadSignal
+	completed chan struct{}
 }
 
 func (s *targetOffloaderStub) Handle(signal model.OffloadSignal, completion func(error)) error {
 	s.mu.Lock()
 	s.signals = append(s.signals, signal)
 	s.mu.Unlock()
+	if s.handled != nil {
+		s.handled <- signal
+	}
 	completion(s.result)
+	if s.completed != nil {
+		s.completed <- struct{}{}
+	}
 	return nil
 }
 
@@ -150,6 +158,78 @@ func TestCoordinatorUsesSnapshotAndEmitsFacts(t *testing.T) {
 	if !collector.HasType(model.EventTargetOffloadSucceeded) {
 		t.Fatalf("expected target offload success fact to be emitted")
 	}
+}
+
+func TestTargetOffloadFlow(t *testing.T) {
+	t.Run("FLOW-NONHTTP-001/facts produce one target action and result fact", func(t *testing.T) {
+		profiles := state.NewStore(state.Config{
+			NonHTTPEnabled:         true,
+			NonHTTPThreshold:       2,
+			HTTPCooldownPeriod:     time.Minute,
+			DecisionDelay:          0,
+			ProfileCleanupInterval: time.Minute,
+		})
+		targetOffloader := &targetOffloaderStub{
+			handled:   make(chan model.OffloadSignal, 1),
+			completed: make(chan struct{}, 1),
+		}
+		dispatcher := events.NewDispatcher()
+		coordinator := NewCoordinator(
+			nilLogger(),
+			profiles,
+			policy.NewTargetPolicy(60, 3600, 2, true),
+			targetOffloader,
+			NoopFlowOffloader{},
+			dispatcher,
+		)
+		defer coordinator.Stop()
+		dispatcher.Add(profiles, coordinator)
+
+		target := model.Target{IP: "203.0.113.10", Port: 443}
+		first := model.SessionEvent{
+			Type:      model.EventNonHTTPObserved,
+			SessionID: 1,
+			Target:    target,
+			Timestamp: time.Now(),
+		}
+		dispatcher.Append(first)
+		if snapshot := profiles.Snapshot(target); snapshot.NonHTTPScore != 1 || !snapshot.PendingTargetOffloadAt.IsZero() {
+			t.Fatalf("first fact produced unexpected snapshot: %+v", snapshot)
+		}
+
+		second := first
+		second.SessionID = 2
+		second.Timestamp = first.Timestamp.Add(time.Millisecond)
+		dispatcher.Append(second)
+
+		var signal model.OffloadSignal
+		select {
+		case signal = <-targetOffloader.handled:
+		case <-time.After(time.Second):
+			t.Fatal("target offload signal was not submitted")
+		}
+		if signal.Kind != model.SignalTryTargetOffload || signal.Target != target || signal.Timeout != 60 || signal.Reason != "non-http threshold reached" {
+			t.Fatalf("unexpected target offload signal: %+v", signal)
+		}
+		select {
+		case <-targetOffloader.completed:
+		case <-time.After(time.Second):
+			t.Fatal("target offload completion was not projected")
+		}
+
+		snapshot := profiles.Snapshot(target)
+		if snapshot.NonHTTPScore != 0 || snapshot.TargetOffloadUntil.IsZero() || snapshot.LastEventType != model.EventTargetOffloadSucceeded {
+			t.Fatalf("success fact was not projected into state: %+v", snapshot)
+		}
+
+		third := second
+		third.SessionID = 3
+		third.Timestamp = second.Timestamp.Add(time.Millisecond)
+		dispatcher.Append(third)
+		if targetOffloader.Count() != 1 {
+			t.Fatalf("offloaded target was submitted %d times, want 1", targetOffloader.Count())
+		}
+	})
 }
 
 func TestCoordinatorKeepsTargetInFlightUntilResultEventIsProjected(t *testing.T) {
