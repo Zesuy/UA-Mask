@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -68,15 +69,17 @@ type filePerformanceConfig struct {
 }
 
 func LoadFile(path string) (*Config, error) {
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("open config file %q: %w", path, err)
+		return nil, fmt.Errorf("read config file %q: %w", path, err)
 	}
-	defer file.Close()
+	if err := validateJSONDocument(data, fileConfig{}); err != nil {
+		return nil, fmt.Errorf("validate config file %q: %w", path, err)
+	}
 
 	raw := defaultFileConfig()
 	raw.SchemaVersion = 0
-	decoder := json.NewDecoder(file)
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("decode config file %q: %w", path, err)

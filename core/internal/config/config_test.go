@@ -86,6 +86,48 @@ func TestLoadJSONConfigErrorsIncludePath(t *testing.T) {
 	}
 }
 
+func TestStrictJSONFixtures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		fixture   string
+		wantError string
+	}{
+		{name: "CFG-NULL-001/null scalar", fixture: "cfg-null-001-null-scalar.json", wantError: "null is not allowed at $.listen.port"},
+		{name: "CFG-NULL-002/null object", fixture: "cfg-null-002-null-object.json", wantError: "null is not allowed at $.performance"},
+		{name: "CFG-NULL-003/null array element", fixture: "cfg-null-003-null-array-element.json", wantError: "null is not allowed at $.rewrite.keywords[1]"},
+		{name: "CFG-DUP-001/duplicate key", fixture: "cfg-dup-001-duplicate-key.json", wantError: `duplicate field "port" at $.listen.port`},
+		{name: "CFG-KEY-001/wrong field case", fixture: "cfg-key-001-wrong-case.json", wantError: `unknown field "Listen" at $.Listen`},
+		{name: "CFG-EOF-001/multiple values", fixture: "cfg-eof-001-multiple-values.json", wantError: "multiple JSON values"},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join("testdata", "invalid", test.fixture)
+			if _, err := LoadFile(path); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("LoadFile(%q) error = %v, want substring %q", path, err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestMinimalJSONFixtureUsesDefaults(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("testdata", "valid", "schema-v1-minimal.json")
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile(%q): %v", path, err)
+	}
+	defaults := DefaultConfig()
+	if cfg.Listen != defaults.Listen || cfg.Performance != defaults.Performance {
+		t.Fatalf("minimal fixture did not retain defaults: got=%+v defaults=%+v", cfg, defaults)
+	}
+}
+
 func TestLegacyFlagsOverrideJSONConfig(t *testing.T) {
 	t.Parallel()
 
