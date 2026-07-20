@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "listen": {
+    "port": 12032,
+    "dial_timeout": "12s",
+    "client_keep_alive": "2m",
+    "upstream_keep_alive": "4m"
+  },
+  "rewrite": {
+    "user_agent": "TraceUA",
+    "mode": "keywords",
+    "keywords": [" Android ", "", "Linux"],
+    "whitelist": [" KeepMe "],
+    "pattern": "Android|Linux",
+    "partial_replace": false
+  },
+  "firewall": {
+    "backend": "NFT",
+    "set_name": "trace_set",
+    "ua_whitelist": [" Steam "],
+    "drop_on_match": false,
+    "whitelist_timeout": "12h",
+    "non_http": {
+      "enabled": false,
+      "threshold": 7,
+      "decision_delay": "15s",
+      "http_cooldown": "30m",
+      "timeout": "4h",
+      "cleanup_interval": "2m"
+    }
+  },
+  "observe": {
+    "log_level": "WARN",
+    "log_file": "/tmp/UAmask/trace.log",
+    "stats_file": "/tmp/UAmask/trace.stats",
+    "stats_interval": "9s"
+  },
+  "performance": {
+    "profile": "custom",
+    "cache_size": 123,
+    "buffer_size": 4096,
+    "pool_size": 7,
+    "gc_percent": 80
+  }
+}

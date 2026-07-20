@@ -56,11 +56,7 @@ func Run(version string) error {
 	if cfg == nil {
 		return fmt.Errorf("configuration is not available")
 	}
-	// Legacy flag-only launches historically left GOGC under the Go runtime and
-	// environment's control. JSON configuration makes GC tuning explicit.
-	if command.ConfigPath != "" {
-		debug.SetGCPercent(cfg.Performance.GCPercent)
-	}
+	applyRuntimeTuning(command)
 	setupLogging(cfg.Observe.LogLevel, cfg.Observe.LogFile)
 
 	if command.ConfigPath != "" {
@@ -73,6 +69,15 @@ func Run(version string) error {
 	}
 
 	return runtime.Run()
+}
+
+func applyRuntimeTuning(command *config.Command) {
+	if command == nil || command.Config == nil || command.ConfigPath == "" {
+		return
+	}
+	// Legacy flag-only launches historically left GOGC under the Go runtime and
+	// environment's control. JSON configuration makes GC tuning explicit.
+	debug.SetGCPercent(command.Config.Performance.GCPercent)
 }
 
 func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {

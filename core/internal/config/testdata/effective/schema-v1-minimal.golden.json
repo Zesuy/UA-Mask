@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "listen": {
+    "port": 8080,
+    "dial_timeout": "30s",
+    "client_keep_alive": "3m0s",
+    "upstream_keep_alive": "3m0s"
+  },
+  "rewrite": {
+    "user_agent": "FFF",
+    "mode": "keywords",
+    "keywords": [
+      "iPhone",
+      "iPad",
+      "Android",
+      "Macintosh",
+      "Windows"
+    ],
+    "whitelist": [],
+    "pattern": "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)",
+    "partial_replace": false
+  },
+  "firewall": {
+    "backend": "ipt",
+    "set_name": "UAmask_bypass_set",
+    "ua_whitelist": [],
+    "drop_on_match": false,
+    "whitelist_timeout": "24h0m0s",
+    "non_http": {
+      "enabled": false,
+      "threshold": 5,
+      "decision_delay": "1m0s",
+      "http_cooldown": "1h0m0s",
+      "timeout": "8h0m0s",
+      "cleanup_interval": "10m0s"
+    }
+  },
+  "observe": {
+    "log_level": "info",
+    "log_file": "",
+    "stats_file": "/tmp/UAmask.stats",
+    "stats_interval": "5s"
+  },
+  "performance": {
+    "profile": "custom",
+    "cache_size": 1000,
+    "buffer_size": 8192,
+    "pool_size": 0,
+    "gc_percent": 100
+  }
+}
