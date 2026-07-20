@@ -26,5 +26,6 @@ shell-check:
 		(echo "OpenWrt init must launch core through a JSON config file, not business flags."; exit 1)
 	@grep -q 'procd_set_param command "$$PROG" -config "$$CORE_CONFIG_PATH"' ../openwrt/root/etc/init.d/UAmask
 	sh ../openwrt/tests/config-generation-test.sh
+	sh ../openwrt/tests/procd-contract-test.sh
 
 ci: fmt-check vet test build shell-check
