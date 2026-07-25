@@ -1,8 +1,7 @@
 package policy
 
 import (
-	"time"
-
+	"UAmask/internal/clock"
 	"UAmask/internal/model"
 )
 
@@ -67,14 +66,20 @@ type TargetPolicy struct {
 	whitelistOffloadTimeout int
 	nonHTTPThreshold        int
 	nonHTTPEnabled          bool
+	clock                   clock.Clock
 }
 
 func NewTargetPolicy(targetOffloadTimeout int, whitelistOffloadTimeout int, nonHTTPThreshold int, nonHTTPEnabled bool) *TargetPolicy {
+	return NewTargetPolicyWithClock(targetOffloadTimeout, whitelistOffloadTimeout, nonHTTPThreshold, nonHTTPEnabled, clock.RealClock{})
+}
+
+func NewTargetPolicyWithClock(targetOffloadTimeout int, whitelistOffloadTimeout int, nonHTTPThreshold int, nonHTTPEnabled bool, runtimeClock clock.Clock) *TargetPolicy {
 	return &TargetPolicy{
 		targetOffloadTimeout:    targetOffloadTimeout,
 		whitelistOffloadTimeout: whitelistOffloadTimeout,
 		nonHTTPThreshold:        nonHTTPThreshold,
 		nonHTTPEnabled:          nonHTTPEnabled,
+		clock:                   clock.OrReal(runtimeClock),
 	}
 }
 
@@ -83,7 +88,7 @@ func (p *TargetPolicy) Evaluate(snapshot model.ProfileSnapshot) model.OffloadSig
 		return model.OffloadSignal{Kind: model.SignalNoAction}
 	}
 
-	now := nowFunc()
+	now := p.clock.Now()
 	if !snapshot.TargetOffloadUntil.IsZero() && now.Before(snapshot.TargetOffloadUntil) {
 		return model.OffloadSignal{Kind: model.SignalNoAction}
 	}
@@ -111,8 +116,4 @@ func (p *TargetPolicy) Evaluate(snapshot model.ProfileSnapshot) model.OffloadSig
 	}
 
 	return model.OffloadSignal{Kind: model.SignalNoAction}
-}
-
-var nowFunc = func() time.Time {
-	return time.Now()
 }

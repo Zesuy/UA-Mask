@@ -3,8 +3,8 @@ package offload
 import (
 	"fmt"
 	"sync"
-	"time"
 
+	"UAmask/internal/clock"
 	"UAmask/internal/events"
 	"UAmask/internal/model"
 	"UAmask/internal/policy"
@@ -22,7 +22,7 @@ type TargetOffloader interface {
 }
 
 type targetTimer struct {
-	timer *time.Timer
+	timer clock.Timer
 }
 
 type Coordinator struct {
@@ -32,6 +32,7 @@ type Coordinator struct {
 	targetOffloader TargetOffloader
 	flowOffloader   FlowOffloader
 	events          *events.Dispatcher
+	clock           clock.Clock
 
 	mu           sync.Mutex
 	targetTimers map[string]*targetTimer
@@ -49,6 +50,18 @@ func NewCoordinator(
 	flowOffloader FlowOffloader,
 	dispatcher *events.Dispatcher,
 ) *Coordinator {
+	return NewCoordinatorWithClock(log, profiles, targetEvaluator, targetOffloader, flowOffloader, dispatcher, clock.RealClock{})
+}
+
+func NewCoordinatorWithClock(
+	log *logrus.Logger,
+	profiles state.ProfileStore,
+	targetEvaluator policy.TargetEvaluator,
+	targetOffloader TargetOffloader,
+	flowOffloader FlowOffloader,
+	dispatcher *events.Dispatcher,
+	runtimeClock clock.Clock,
+) *Coordinator {
 	return &Coordinator{
 		log:             log,
 		profiles:        profiles,
@@ -56,6 +69,7 @@ func NewCoordinator(
 		targetOffloader: targetOffloader,
 		flowOffloader:   flowOffloader,
 		events:          dispatcher,
+		clock:           clock.OrReal(runtimeClock),
 		targetTimers:    make(map[string]*targetTimer),
 		inFlight:        make(map[string]struct{}),
 	}
@@ -133,7 +147,7 @@ func (c *Coordinator) scheduleTargetEvaluation(snapshot model.ProfileSnapshot) {
 		return
 	}
 
-	delay := time.Until(snapshot.PendingTargetOffloadAt)
+	delay := snapshot.PendingTargetOffloadAt.Sub(c.clock.Now())
 	if delay < 0 {
 		delay = 0
 	}
@@ -151,7 +165,7 @@ func (c *Coordinator) scheduleTargetEvaluation(snapshot model.ProfileSnapshot) {
 	}
 
 	scheduled := &targetTimer{}
-	scheduled.timer = time.AfterFunc(delay, func() {
+	scheduled.timer = c.clock.AfterFunc(delay, func() {
 		c.mu.Lock()
 		current, ok := c.targetTimers[key]
 		if !ok || current != scheduled || c.stopped {
@@ -194,7 +208,7 @@ func (c *Coordinator) handleFlowSignal(signal model.OffloadSignal) {
 			SessionID: signal.SessionID,
 			Target:    signal.Target,
 			Reason:    err.Error(),
-			Timestamp: time.Now(),
+			Timestamp: c.clock.Now(),
 		})
 		return
 	}
@@ -203,7 +217,7 @@ func (c *Coordinator) handleFlowSignal(signal model.OffloadSignal) {
 		Type:      model.EventFlowOffloadSucceeded,
 		SessionID: signal.SessionID,
 		Target:    signal.Target,
-		Timestamp: time.Now(),
+		Timestamp: c.clock.Now(),
 	})
 }
 
@@ -233,7 +247,7 @@ func (c *Coordinator) completeTargetSignal(signal model.OffloadSignal, err error
 		Target:    signal.Target,
 		Reason:    signal.Reason,
 		Timeout:   signal.Timeout,
-		Timestamp: time.Now(),
+		Timestamp: c.clock.Now(),
 	}
 	if err != nil {
 		c.log.Debugf("[Offload] target signal failed for %s: %v", signal.Target.Address, err)

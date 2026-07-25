@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"UAmask/internal/clock"
 	"UAmask/internal/model"
 )
 
@@ -26,6 +27,7 @@ type Config struct {
 
 type Store struct {
 	config Config
+	clock  clock.Clock
 
 	mu       sync.RWMutex
 	profiles map[string]*model.TargetProfile
@@ -36,12 +38,17 @@ type Store struct {
 }
 
 func NewStore(cfg Config) *Store {
+	return NewStoreWithClock(cfg, clock.RealClock{})
+}
+
+func NewStoreWithClock(cfg Config, runtimeClock clock.Clock) *Store {
 	if cfg.ProfileCleanupInterval <= 0 {
 		cfg.ProfileCleanupInterval = 10 * time.Minute
 	}
 
 	return &Store{
 		config:   cfg,
+		clock:    clock.OrReal(runtimeClock),
 		profiles: make(map[string]*model.TargetProfile),
 		stopChan: make(chan struct{}),
 	}
@@ -69,7 +76,7 @@ func (s *Store) Append(event model.SessionEvent) {
 
 	now := event.Timestamp
 	if now.IsZero() {
-		now = time.Now()
+		now = s.clock.Now()
 	}
 
 	switch event.Type {
@@ -147,12 +154,12 @@ func (s *Store) Snapshot(target model.Target) model.ProfileSnapshot {
 func (s *Store) cleanupLoop() {
 	defer s.waitGroup.Done()
 
-	ticker := time.NewTicker(s.config.ProfileCleanupInterval)
+	ticker := s.clock.NewTicker(s.config.ProfileCleanupInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-ticker.C():
 			s.cleanup()
 		case <-s.stopChan:
 			return
@@ -164,7 +171,7 @@ func (s *Store) cleanup() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
+	now := s.clock.Now()
 	for key, profile := range s.profiles {
 		if !profile.TargetOffloadUntil.IsZero() && now.Before(profile.TargetOffloadUntil) {
 			continue

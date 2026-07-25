@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"UAmask/internal/clock"
 	"UAmask/internal/model"
 )
 
@@ -57,11 +58,7 @@ func TestEvaluateSessionUsesRewriteInputWithoutSideEffects(t *testing.T) {
 func TestEvaluateTargetUsesSnapshotOnly(t *testing.T) {
 	t.Parallel()
 
-	originalNow := nowFunc
-	nowFunc = func() time.Time { return time.Unix(100, 0) }
-	defer func() { nowFunc = originalNow }()
-
-	evaluator := NewTargetPolicy(60, 3600, 2, true)
+	evaluator := NewTargetPolicyWithClock(60, 3600, 2, true, fixedClock{now: time.Unix(100, 0)})
 	target := model.Target{IP: "1.1.1.1", Port: 80}
 
 	whitelistSignal := evaluator.Evaluate(model.ProfileSnapshot{
@@ -93,6 +90,15 @@ func TestEvaluateTargetUsesSnapshotOnly(t *testing.T) {
 	if noAction.Kind != model.SignalNoAction {
 		t.Fatalf("expected no action for immature snapshot, got %s", noAction.Kind)
 	}
+}
+
+type fixedClock struct {
+	clock.RealClock
+	now time.Time
+}
+
+func (value fixedClock) Now() time.Time {
+	return value.now
 }
 
 func TestEvaluateTargetKeepsWhitelistEnabledWhenNonHTTPBypassIsDisabled(t *testing.T) {

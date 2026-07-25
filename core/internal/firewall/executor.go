@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"UAmask/internal/clock"
+
 	"github.com/sirupsen/logrus"
 )
 
@@ -39,9 +41,14 @@ type Executor struct {
 	applier      Applier
 	maxBatchSize int
 	maxBatchWait time.Duration
+	clock        clock.Clock
 }
 
 func NewExecutor(log *logrus.Logger, queueSize int, applier Applier) *Executor {
+	return NewExecutorWithClock(log, queueSize, applier, clock.RealClock{})
+}
+
+func NewExecutorWithClock(log *logrus.Logger, queueSize int, applier Applier, runtimeClock clock.Clock) *Executor {
 	return &Executor{
 		queue:        make(chan queuedTarget, queueSize),
 		stopChan:     make(chan struct{}),
@@ -49,6 +56,7 @@ func NewExecutor(log *logrus.Logger, queueSize int, applier Applier) *Executor {
 		applier:      applier,
 		maxBatchSize: 200,
 		maxBatchWait: 100 * time.Millisecond,
+		clock:        clock.OrReal(runtimeClock),
 	}
 }
 
@@ -91,7 +99,7 @@ func (e *Executor) TryEnqueueWithResult(target BypassTarget, completion func(err
 	select {
 	case e.queue <- queuedTarget{target: target, completion: completion}:
 		return true
-	case <-time.After(50 * time.Millisecond):
+	case <-e.clock.After(50 * time.Millisecond):
 		e.log.Warnf("[FirewallExecutor] queue full, dropping target for %s:%d", target.IP, target.Port)
 		return false
 	}
@@ -101,9 +109,9 @@ func (e *Executor) worker() {
 	defer e.waitGroup.Done()
 
 	batches := make(map[string]map[string]*pendingTarget)
-	batchTimer := time.NewTimer(e.maxBatchWait)
+	batchTimer := e.clock.NewTimer(e.maxBatchWait)
 	if !batchTimer.Stop() {
-		<-batchTimer.C
+		<-batchTimer.C()
 	}
 
 	for {
@@ -120,13 +128,13 @@ func (e *Executor) worker() {
 				batches = make(map[string]map[string]*pendingTarget)
 				if !batchTimer.Stop() {
 					select {
-					case <-batchTimer.C:
+					case <-batchTimer.C():
 					default:
 					}
 				}
 			}
 
-		case <-batchTimer.C:
+		case <-batchTimer.C():
 			if len(batches) > 0 {
 				e.executeBatches(batches)
 				batches = make(map[string]map[string]*pendingTarget)
