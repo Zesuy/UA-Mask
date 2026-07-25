@@ -91,6 +91,20 @@ For changes touching architecture boundaries, add or update focused tests:
 - `offload`: actions happen only from explicit `OffloadSignal`.
 - `session`: connection-local state does not own target profile data.
 
+Async and time-dependent tests must be deterministic:
+
+- Inject `internal/clock.Clock`; use `internal/testkit/manualclock` to advance business time.
+- Use `Dispatcher.WaitIdle` to wait for causal event fan-out and `Executor.Flush` to wait for queued firewall work.
+- Do not use `time.Sleep`, polling, or real timers to advance business state or prove that a decision delay or cooldown elapsed.
+- Real context deadlines and timeout channels are allowed only as hang protection for concurrency and lifecycle tests.
+- Prefer `internal/testkit/scenario` for cross-package target decision flows, preserving the fact -> snapshot -> signal -> action -> result fact boundaries.
+
+Run the deterministic core stress suite with:
+
+```sh
+make stress
+```
+
 Use:
 
 ```sh

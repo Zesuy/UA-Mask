@@ -68,6 +68,9 @@ jobs:
       - name: Race tests
         run: go test -race -count=1 ./...
 
+      - name: Deterministic core stress tests
+        run: make stress
+
       - name: Build
         run: make build
 

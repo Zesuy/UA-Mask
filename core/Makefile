@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: fmt-check vet test cover build shell-check ci
+.PHONY: fmt-check vet test stress cover build shell-check ci
 
 fmt-check:
 	@test -z "$$(find . -name '*.go' -print0 | xargs -0 gofmt -l)" || \
@@ -12,6 +12,15 @@ vet:
 
 test:
 	$(GO) test ./...
+
+stress:
+	$(GO) test -race -count=20 \
+		./internal/events \
+		./internal/state \
+		./internal/policy \
+		./internal/offload \
+		./internal/firewall \
+		./integration
 
 cover:
 	$(GO) test -covermode=atomic -coverprofile=coverage.out ./...
