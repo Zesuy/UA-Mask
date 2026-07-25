@@ -127,6 +127,18 @@ func (clock *Clock) Pending() int {
 	return count
 }
 
+func (clock *Clock) Due() int {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	count := 0
+	for timer := range clock.timers {
+		if timer.active && !timer.due.After(clock.now) {
+			count++
+		}
+	}
+	return count
+}
+
 func (clock *Clock) schedule(duration, interval time.Duration, channel chan time.Time, callback func(), ticker bool) *scheduled {
 	clock.mu.Lock()
 	defer clock.mu.Unlock()
