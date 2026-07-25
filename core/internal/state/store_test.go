@@ -5,21 +5,23 @@ import (
 	"time"
 
 	"UAmask/internal/model"
+	"UAmask/internal/testkit/manualclock"
 )
 
 func TestStoreAggregatesFactsIntoProfile(t *testing.T) {
 	t.Parallel()
 
-	store := NewStore(Config{
+	runtimeClock := manualclock.New(time.Unix(100, 0))
+	store := NewStoreWithClock(Config{
 		NonHTTPEnabled:         true,
 		NonHTTPThreshold:       2,
 		HTTPCooldownPeriod:     30 * time.Second,
 		DecisionDelay:          5 * time.Second,
 		ProfileCleanupInterval: time.Minute,
-	})
+	}, runtimeClock)
 
 	target := model.Target{IP: "1.1.1.1", Port: 80}
-	now := time.Now()
+	now := runtimeClock.Now()
 
 	store.Append(model.SessionEvent{Type: model.EventNonHTTPObserved, Target: target, Timestamp: now})
 	first := store.Snapshot(target)
@@ -67,17 +69,18 @@ func TestStoreAggregatesFactsIntoProfile(t *testing.T) {
 func TestStoreDoesNotScheduleNonHTTPWhenFeatureIsDisabled(t *testing.T) {
 	t.Parallel()
 
-	store := NewStore(Config{
+	runtimeClock := manualclock.New(time.Unix(100, 0))
+	store := NewStoreWithClock(Config{
 		NonHTTPEnabled:         false,
 		NonHTTPThreshold:       1,
 		DecisionDelay:          time.Second,
 		ProfileCleanupInterval: time.Minute,
-	})
+	}, runtimeClock)
 	target := model.Target{IP: "1.1.1.1", Port: 80}
 	store.Append(model.SessionEvent{
 		Type:      model.EventNonHTTPObserved,
 		Target:    target,
-		Timestamp: time.Now(),
+		Timestamp: runtimeClock.Now(),
 	})
 
 	snapshot := store.Snapshot(target)

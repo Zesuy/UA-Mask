@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"UAmask/internal/clock"
 	"UAmask/internal/model"
+	"UAmask/internal/testkit/manualclock"
 )
 
 func TestEvaluateSessionUsesRewriteInputWithoutSideEffects(t *testing.T) {
@@ -58,7 +58,8 @@ func TestEvaluateSessionUsesRewriteInputWithoutSideEffects(t *testing.T) {
 func TestEvaluateTargetUsesSnapshotOnly(t *testing.T) {
 	t.Parallel()
 
-	evaluator := NewTargetPolicyWithClock(60, 3600, 2, true, fixedClock{now: time.Unix(100, 0)})
+	runtimeClock := manualclock.New(time.Unix(100, 0))
+	evaluator := NewTargetPolicyWithClock(60, 3600, 2, true, runtimeClock)
 	target := model.Target{IP: "1.1.1.1", Port: 80}
 
 	whitelistSignal := evaluator.Evaluate(model.ProfileSnapshot{
@@ -92,19 +93,11 @@ func TestEvaluateTargetUsesSnapshotOnly(t *testing.T) {
 	}
 }
 
-type fixedClock struct {
-	clock.RealClock
-	now time.Time
-}
-
-func (value fixedClock) Now() time.Time {
-	return value.now
-}
-
 func TestEvaluateTargetKeepsWhitelistEnabledWhenNonHTTPBypassIsDisabled(t *testing.T) {
 	t.Parallel()
 
-	evaluator := NewTargetPolicy(60, 3600, 2, false)
+	runtimeClock := manualclock.New(time.Unix(100, 0))
+	evaluator := NewTargetPolicyWithClock(60, 3600, 2, false, runtimeClock)
 	target := model.Target{IP: "1.1.1.1", Port: 80}
 
 	whitelistSignal := evaluator.Evaluate(model.ProfileSnapshot{
@@ -121,7 +114,7 @@ func TestEvaluateTargetKeepsWhitelistEnabledWhenNonHTTPBypassIsDisabled(t *testi
 		Found:                  true,
 		Target:                 target,
 		NonHTTPScore:           2,
-		PendingTargetOffloadAt: time.Now().Add(-time.Second),
+		PendingTargetOffloadAt: runtimeClock.Now().Add(-time.Second),
 	})
 	if nonHTTPSignal.Kind != model.SignalNoAction {
 		t.Fatalf("expected non-http offload to be disabled, got %s", nonHTTPSignal.Kind)

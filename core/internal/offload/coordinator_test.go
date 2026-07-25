@@ -11,6 +11,7 @@ import (
 	"UAmask/internal/model"
 	"UAmask/internal/policy"
 	"UAmask/internal/state"
+	"UAmask/internal/testkit/manualclock"
 
 	"github.com/sirupsen/logrus"
 )
@@ -119,24 +120,26 @@ func (c *collectorSink) HasType(eventType model.SessionEventType) bool {
 func TestCoordinatorUsesSnapshotAndEmitsFacts(t *testing.T) {
 	t.Parallel()
 
-	profiles := state.NewStore(state.Config{
+	runtimeClock := manualclock.New(time.Unix(100, 0))
+	profiles := state.NewStoreWithClock(state.Config{
 		NonHTTPEnabled:         true,
 		NonHTTPThreshold:       2,
 		HTTPCooldownPeriod:     time.Minute,
 		DecisionDelay:          10 * time.Millisecond,
 		ProfileCleanupInterval: time.Minute,
-	})
+	}, runtimeClock)
 
 	targetOffloader := &targetOffloaderStub{}
 	collector := &collectorSink{}
 	dispatcher := events.NewDispatcher()
-	coordinator := NewCoordinator(
+	coordinator := NewCoordinatorWithClock(
 		nilLogger(),
 		profiles,
-		policy.NewTargetPolicy(60, 3600, 2, true),
+		policy.NewTargetPolicyWithClock(60, 3600, 2, true, runtimeClock),
 		targetOffloader,
 		NoopFlowOffloader{},
 		dispatcher,
+		runtimeClock,
 	)
 	dispatcher.Add(profiles, collector, coordinator)
 
@@ -146,7 +149,7 @@ func TestCoordinatorUsesSnapshotAndEmitsFacts(t *testing.T) {
 		Target:      target,
 		Reason:      "Hit Firewall UA Whitelist",
 		FirewallHit: true,
-		Timestamp:   time.Now(),
+		Timestamp:   runtimeClock.Now(),
 	}
 
 	profiles.Append(event)
@@ -162,25 +165,27 @@ func TestCoordinatorUsesSnapshotAndEmitsFacts(t *testing.T) {
 
 func TestTargetOffloadFlow(t *testing.T) {
 	t.Run("FLOW-NONHTTP-001/facts produce one target action and result fact", func(t *testing.T) {
-		profiles := state.NewStore(state.Config{
+		runtimeClock := manualclock.New(time.Unix(100, 0))
+		profiles := state.NewStoreWithClock(state.Config{
 			NonHTTPEnabled:         true,
 			NonHTTPThreshold:       2,
 			HTTPCooldownPeriod:     time.Minute,
-			DecisionDelay:          0,
+			DecisionDelay:          10 * time.Second,
 			ProfileCleanupInterval: time.Minute,
-		})
+		}, runtimeClock)
 		targetOffloader := &targetOffloaderStub{
 			handled:   make(chan model.OffloadSignal, 1),
 			completed: make(chan struct{}, 1),
 		}
 		dispatcher := events.NewDispatcher()
-		coordinator := NewCoordinator(
+		coordinator := NewCoordinatorWithClock(
 			nilLogger(),
 			profiles,
-			policy.NewTargetPolicy(60, 3600, 2, true),
+			policy.NewTargetPolicyWithClock(60, 3600, 2, true, runtimeClock),
 			targetOffloader,
 			NoopFlowOffloader{},
 			dispatcher,
+			runtimeClock,
 		)
 		defer coordinator.Stop()
 		dispatcher.Add(profiles, coordinator)
@@ -190,7 +195,7 @@ func TestTargetOffloadFlow(t *testing.T) {
 			Type:      model.EventNonHTTPObserved,
 			SessionID: 1,
 			Target:    target,
-			Timestamp: time.Now(),
+			Timestamp: runtimeClock.Now(),
 		}
 		dispatcher.Append(first)
 		if snapshot := profiles.Snapshot(target); snapshot.NonHTTPScore != 1 || !snapshot.PendingTargetOffloadAt.IsZero() {
@@ -201,11 +206,12 @@ func TestTargetOffloadFlow(t *testing.T) {
 		second.SessionID = 2
 		second.Timestamp = first.Timestamp.Add(time.Millisecond)
 		dispatcher.Append(second)
+		runtimeClock.Advance(10*time.Second + time.Millisecond)
 
 		var signal model.OffloadSignal
 		select {
 		case signal = <-targetOffloader.handled:
-		case <-time.After(time.Second):
+		default:
 			t.Fatal("target offload signal was not submitted")
 		}
 		if signal.Kind != model.SignalTryTargetOffload || signal.Target != target || signal.Timeout != 60 || signal.Reason != "non-http threshold reached" {
@@ -213,7 +219,7 @@ func TestTargetOffloadFlow(t *testing.T) {
 		}
 		select {
 		case <-targetOffloader.completed:
-		case <-time.After(time.Second):
+		default:
 			t.Fatal("target offload completion was not projected")
 		}
 
@@ -304,32 +310,34 @@ func TestCoordinatorProjectsApplyFailure(t *testing.T) {
 func TestCoordinatorStopCancelsPendingTargetEvaluation(t *testing.T) {
 	t.Parallel()
 
-	profiles := state.NewStore(state.Config{
+	runtimeClock := manualclock.New(time.Unix(100, 0))
+	profiles := state.NewStoreWithClock(state.Config{
 		NonHTTPEnabled:   true,
 		NonHTTPThreshold: 1,
-		DecisionDelay:    30 * time.Millisecond,
-	})
+		DecisionDelay:    30 * time.Second,
+	}, runtimeClock)
 	targetOffloader := &delayedTargetOffloaderStub{}
 	dispatcher := events.NewDispatcher()
-	coordinator := NewCoordinator(
+	coordinator := NewCoordinatorWithClock(
 		nilLogger(),
 		profiles,
-		policy.NewTargetPolicy(60, 3600, 1, true),
+		policy.NewTargetPolicyWithClock(60, 3600, 1, true, runtimeClock),
 		targetOffloader,
 		NoopFlowOffloader{},
 		dispatcher,
+		runtimeClock,
 	)
 	target := model.Target{IP: "1.1.1.1", Port: 80}
 	event := model.SessionEvent{
 		Type:      model.EventNonHTTPObserved,
 		Target:    target,
-		Timestamp: time.Now(),
+		Timestamp: runtimeClock.Now(),
 	}
 	profiles.Append(event)
 	coordinator.Append(event)
 
 	coordinator.Stop()
-	time.Sleep(60 * time.Millisecond)
+	runtimeClock.Advance(30 * time.Second)
 	if targetOffloader.Count() != 0 {
 		t.Fatalf("expected stopped coordinator to suppress timer submission, got %d", targetOffloader.Count())
 	}
