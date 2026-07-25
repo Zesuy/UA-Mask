@@ -1,6 +1,8 @@
 package firewall
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -13,6 +15,7 @@ import (
 )
 
 var validSetName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+var ErrExecutorStopped = errors.New("firewall executor stopped")
 
 type Applier interface {
 	ApplyBatch(items []BypassTarget) error
@@ -23,6 +26,7 @@ type completionFunc func(error)
 type queuedTarget struct {
 	target     BypassTarget
 	completion completionFunc
+	flush      chan struct{}
 }
 
 type pendingTarget struct {
@@ -105,18 +109,50 @@ func (e *Executor) TryEnqueueWithResult(target BypassTarget, completion func(err
 	}
 }
 
+func (e *Executor) Flush(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan struct{})
+
+	e.lifecycleMu.RLock()
+	if e.stopped {
+		e.lifecycleMu.RUnlock()
+		return ErrExecutorStopped
+	}
+	select {
+	case e.queue <- queuedTarget{flush: done}:
+		e.lifecycleMu.RUnlock()
+	case <-ctx.Done():
+		e.lifecycleMu.RUnlock()
+		return ctx.Err()
+	}
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (e *Executor) worker() {
 	defer e.waitGroup.Done()
 
 	batches := make(map[string]map[string]*pendingTarget)
 	batchTimer := e.clock.NewTimer(e.maxBatchWait)
-	if !batchTimer.Stop() {
-		<-batchTimer.C()
-	}
+	stopAndDrainTimer(batchTimer)
 
 	for {
 		select {
 		case queued := <-e.queue:
+			if queued.flush != nil {
+				e.executeBatches(batches)
+				batches = make(map[string]map[string]*pendingTarget)
+				stopAndDrainTimer(batchTimer)
+				close(queued.flush)
+				continue
+			}
 			key := e.addToBatch(batches, queued)
 
 			if len(batches) == 1 && len(batches[key]) == 1 {
@@ -126,12 +162,7 @@ func (e *Executor) worker() {
 			if len(batches[key]) >= e.maxBatchSize {
 				e.executeBatches(batches)
 				batches = make(map[string]map[string]*pendingTarget)
-				if !batchTimer.Stop() {
-					select {
-					case <-batchTimer.C():
-					default:
-					}
-				}
+				stopAndDrainTimer(batchTimer)
 			}
 
 		case <-batchTimer.C():
@@ -141,21 +172,38 @@ func (e *Executor) worker() {
 			}
 
 		case <-e.stopChan:
-			e.drainQueue(batches)
+			batches = e.drainQueue(batches)
 			e.executeBatches(batches)
+			stopAndDrainTimer(batchTimer)
 			return
 		}
 	}
 }
 
-func (e *Executor) drainQueue(batches map[string]map[string]*pendingTarget) {
+func (e *Executor) drainQueue(batches map[string]map[string]*pendingTarget) map[string]map[string]*pendingTarget {
 	for {
 		select {
 		case queued := <-e.queue:
+			if queued.flush != nil {
+				e.executeBatches(batches)
+				batches = make(map[string]map[string]*pendingTarget)
+				close(queued.flush)
+				continue
+			}
 			e.addToBatch(batches, queued)
 		default:
-			return
+			return batches
 		}
+	}
+}
+
+func stopAndDrainTimer(timer clock.Timer) {
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C():
+	default:
 	}
 }
 
