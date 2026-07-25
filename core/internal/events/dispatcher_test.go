@@ -1,6 +1,7 @@
 package events
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -60,6 +61,11 @@ func TestDispatcherDropsNewestEventWhenQueueIsFull(t *testing.T) {
 	}
 
 	close(blocker.release)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := dispatcher.WaitIdle(ctx); err != nil {
+		t.Fatalf("QUEUE-DISPATCH-002 dispatcher did not become idle: %v", err)
+	}
 	dispatcher.Stop()
 }
 
@@ -106,4 +112,54 @@ func TestDispatcherStopsAtQueuedEventBoundary(t *testing.T) {
 	if dispatcher.Dropped() != 1 {
 		t.Fatalf("expected event emitted after stop boundary to be dropped, got %d", dispatcher.Dropped())
 	}
+}
+
+func TestDispatcherWaitIdleIncludesCausalEvents(t *testing.T) {
+	t.Parallel()
+
+	dispatcher := NewDispatcher()
+	collector := &collectingSink{}
+	dispatcher.Add(&emittingSink{dispatcher: dispatcher}, collector)
+	dispatcher.Start()
+	defer dispatcher.Stop()
+
+	dispatcher.Append(model.SessionEvent{Type: model.EventSessionOpened})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := dispatcher.WaitIdle(ctx); err != nil {
+		t.Fatalf("QUEUE-DISPATCH-001 WaitIdle: %v", err)
+	}
+
+	got := collector.Types()
+	want := []model.SessionEventType{model.EventSessionOpened, model.EventSessionClosed}
+	if len(got) != len(want) {
+		t.Fatalf("QUEUE-DISPATCH-001 expected %d events, got %d: %v", len(want), len(got), got)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("QUEUE-DISPATCH-001 event %d = %s, want %s", index, got[index], want[index])
+		}
+	}
+}
+
+func TestDispatcherWaitIdleHonorsContext(t *testing.T) {
+	t.Parallel()
+
+	blocker := &blockingSink{started: make(chan struct{}), release: make(chan struct{})}
+	dispatcher := NewDispatcher(blocker)
+	dispatcher.Start()
+	dispatcher.Append(model.SessionEvent{Type: model.EventSessionOpened})
+	select {
+	case <-blocker.started:
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher did not start processing blocked event")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := dispatcher.WaitIdle(ctx); err != context.Canceled {
+		t.Fatalf("WaitIdle error = %v, want context.Canceled", err)
+	}
+	close(blocker.release)
+	dispatcher.Stop()
 }
