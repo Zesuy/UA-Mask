@@ -7,7 +7,3 @@ type BypassTarget struct {
 	Backend string
 	Timeout int
 }
-
-type TargetSink interface {
-	Enqueue(target BypassTarget)
-}
