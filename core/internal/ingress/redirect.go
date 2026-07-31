@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -18,7 +19,16 @@ type Redirect struct {
 	mu       sync.Mutex
 	listener *net.TCPListener
 	config   config.ListenConfig
+	closed   bool
 }
+
+type temporaryAcceptError struct {
+	err error
+}
+
+func (e temporaryAcceptError) Error() string   { return e.err.Error() }
+func (e temporaryAcceptError) Unwrap() error   { return e.err }
+func (e temporaryAcceptError) Temporary() bool { return true }
 
 func NewRedirect(cfg config.ListenConfig) (*Redirect, error) {
 	return &Redirect{
@@ -40,7 +50,7 @@ func (r *Redirect) Accept() (*model.AcceptedSession, error) {
 	originalDst, err := getOriginalDst(clientConn)
 	if err != nil {
 		_ = clientConn.Close()
-		return nil, err
+		return nil, temporaryAcceptError{err: err}
 	}
 
 	_ = clientConn.SetKeepAlive(true)
@@ -58,18 +68,33 @@ func (r *Redirect) Accept() (*model.AcceptedSession, error) {
 }
 
 func (r *Redirect) Close() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r == nil || r.listener == nil {
+	if r == nil {
 		return nil
 	}
-	return r.listener.Close()
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil
+	}
+	r.closed = true
+	listener := r.listener
+	r.mu.Unlock()
+
+	if listener == nil {
+		return nil
+	}
+	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
 }
 
 func (r *Redirect) ensureListener() (*net.TCPListener, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return nil, net.ErrClosed
+	}
 
 	if r.listener != nil {
 		return r.listener, nil

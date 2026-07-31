@@ -1,9 +1,14 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime/debug"
+	"syscall"
+	"time"
 
 	"UAmask/internal/config"
 	"UAmask/internal/events"
@@ -21,17 +26,42 @@ import (
 )
 
 const firewallQueueSize = 10000
+const runtimeShutdownTimeout = 15 * time.Second
+
+type startStop interface {
+	Start()
+	Stop()
+}
+
+type executorRuntime interface {
+	startStop
+	Flush(context.Context) error
+}
+
+type dispatcherRuntime interface {
+	startStop
+	WaitIdle(context.Context) error
+}
+
+type offloadRuntime interface {
+	Stop()
+}
+
+type serverRuntime interface {
+	RunContext(context.Context) error
+}
 
 type Runtime struct {
 	config           *config.Config
 	version          string
 	stats            *stats.Stats
-	statsReporter    *stats.FileReporter
-	profileStore     *state.Store
-	firewallExecutor *firewall.Executor
-	dispatcher       *events.Dispatcher
-	offload          *offload.Coordinator
-	server           *proxy.Server
+	statsReporter    startStop
+	profileStore     startStop
+	firewallExecutor executorRuntime
+	dispatcher       dispatcherRuntime
+	offload          offloadRuntime
+	server           serverRuntime
+	shutdownTimeout  time.Duration
 }
 
 func Run(version string) error {
@@ -68,7 +98,9 @@ func Run(version string) error {
 		return err
 	}
 
-	return runtime.Run()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runtime.RunContext(ctx)
 }
 
 func applyRuntimeTuning(command *config.Command) {
@@ -139,25 +171,68 @@ func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {
 		dispatcher:       dispatcher,
 		offload:          offloadCoordinator,
 		server:           server,
+		shutdownTimeout:  runtimeShutdownTimeout,
 	}, nil
 }
 
 func (r *Runtime) Run() error {
+	return r.RunContext(context.Background())
+}
+
+func (r *Runtime) RunContext(ctx context.Context) error {
+	if err := r.validate(); err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	r.config.LogConfig(r.version)
 
 	r.firewallExecutor.Start()
 	r.profileStore.Start()
 	r.statsReporter.Start()
 	r.dispatcher.Start()
-	defer func() {
-		if r.offload != nil {
-			r.offload.Stop()
-		}
-		r.firewallExecutor.Stop()
-		r.dispatcher.Stop()
-		r.statsReporter.Stop()
-		r.profileStore.Stop()
-	}()
 
-	return r.server.Run()
+	runErr := r.server.RunContext(ctx)
+	if ctx.Err() != nil && errors.Is(runErr, ctx.Err()) {
+		runErr = nil
+	}
+	return errors.Join(runErr, r.shutdown())
+}
+
+func (r *Runtime) validate() error {
+	if r == nil || r.config == nil || r.statsReporter == nil || r.profileStore == nil ||
+		r.firewallExecutor == nil || r.dispatcher == nil || r.offload == nil || r.server == nil {
+		return errors.New("runtime dependencies are not configured")
+	}
+	return nil
+}
+
+func (r *Runtime) shutdown() error {
+	timeout := r.shutdownTimeout
+	if timeout <= 0 {
+		timeout = runtimeShutdownTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	r.offload.Stop()
+	flushErr := r.firewallExecutor.Flush(ctx)
+	r.firewallExecutor.Stop()
+	idleErr := r.dispatcher.WaitIdle(ctx)
+	r.dispatcher.Stop()
+	r.statsReporter.Stop()
+	r.profileStore.Stop()
+
+	return errors.Join(
+		wrapShutdownError("flush firewall executor", flushErr),
+		wrapShutdownError("wait for event dispatcher", idleErr),
+	)
+}
+
+func wrapShutdownError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
