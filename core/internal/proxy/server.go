@@ -41,12 +41,14 @@ func (s *Server) RunContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	sessionCtx, cancelSessions := context.WithCancel(ctx)
+	sessionCtx, cancelSessions := context.WithCancel(context.WithoutCancel(ctx))
 
 	tracker := newSessionTracker()
+	shutdownStarted := make(chan struct{})
 	var shutdownOnce sync.Once
 	shutdown := func() {
 		shutdownOnce.Do(func() {
+			close(shutdownStarted)
 			_ = s.ingress.Close()
 			cancelSessions()
 			tracker.CloseAll()
@@ -64,9 +66,9 @@ func (s *Server) RunContext(ctx context.Context) error {
 	logrus.Infof("UA-Mask ingress server ready")
 	var runErr error
 	if s.poolSize > 0 {
-		runErr = s.runWithPool(sessionCtx, tracker, shutdown)
+		runErr = s.runWithPool(sessionCtx, tracker, shutdownStarted, shutdown)
 	} else {
-		runErr = s.runDefault(sessionCtx, tracker)
+		runErr = s.runDefault(sessionCtx, tracker, shutdownStarted)
 	}
 	shutdown()
 	close(watchDone)
@@ -74,7 +76,12 @@ func (s *Server) RunContext(ctx context.Context) error {
 	return runErr
 }
 
-func (s *Server) runWithPool(ctx context.Context, tracker *sessionTracker, shutdown func()) error {
+func (s *Server) runWithPool(
+	ctx context.Context,
+	tracker *sessionTracker,
+	shutdownStarted <-chan struct{},
+	shutdown func(),
+) error {
 	logrus.Infof("Starting in Worker Pool Mode (size: %d)", s.poolSize)
 
 	sessionChan := make(chan *model.AcceptedSession, s.poolSize)
@@ -96,7 +103,7 @@ func (s *Server) runWithPool(ctx context.Context, tracker *sessionTracker, shutd
 		}(i)
 	}
 
-	err := s.acceptLoop(ctx, func(accepted *model.AcceptedSession) bool {
+	err := s.acceptLoop(ctx, shutdownStarted, func(accepted *model.AcceptedSession) bool {
 		if !tracker.Add(accepted) {
 			closeAccepted(accepted)
 			return false
@@ -116,9 +123,9 @@ func (s *Server) runWithPool(ctx context.Context, tracker *sessionTracker, shutd
 	return err
 }
 
-func (s *Server) runDefault(ctx context.Context, tracker *sessionTracker) error {
+func (s *Server) runDefault(ctx context.Context, tracker *sessionTracker, shutdownStarted <-chan struct{}) error {
 	logrus.Info("Starting in Default Mode (one goroutine per connection)")
-	return s.acceptLoop(ctx, func(accepted *model.AcceptedSession) bool {
+	return s.acceptLoop(ctx, shutdownStarted, func(accepted *model.AcceptedSession) bool {
 		if !tracker.Add(accepted) {
 			closeAccepted(accepted)
 			return false
@@ -139,11 +146,15 @@ func (s *Server) handleSession(ctx context.Context, accepted *model.AcceptedSess
 	s.manager.Handle(accepted)
 }
 
-func (s *Server) acceptLoop(ctx context.Context, submit func(*model.AcceptedSession) bool) error {
+func (s *Server) acceptLoop(
+	ctx context.Context,
+	shutdownStarted <-chan struct{},
+	submit func(*model.AcceptedSession) bool,
+) error {
 	for {
 		accepted, err := s.ingress.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || channelClosed(shutdownStarted) {
 				return nil
 			}
 			if !isTemporaryAcceptError(err) {
@@ -161,6 +172,15 @@ func (s *Server) acceptLoop(ctx context.Context, submit func(*model.AcceptedSess
 		if !submit(accepted) {
 			return nil
 		}
+	}
+}
+
+func channelClosed(channel <-chan struct{}) bool {
+	select {
+	case <-channel:
+		return true
+	default:
+		return false
 	}
 }
 

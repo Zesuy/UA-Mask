@@ -4,13 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"UAmask/internal/model"
+
+	"github.com/sirupsen/logrus"
 )
+
+func TestMain(main *testing.M) {
+	logrus.SetOutput(io.Discard)
+	os.Exit(main.Run())
+}
 
 type acceptResult struct {
 	session *model.AcceptedSession
@@ -49,6 +58,27 @@ type contextBlockingManager struct {
 	mu      sync.Mutex
 	handled []*model.AcceptedSession
 	started chan *model.AcceptedSession
+}
+
+type orderedContextManager struct {
+	ingress  *ingressStub
+	started  chan struct{}
+	observed chan bool
+}
+
+func (manager *orderedContextManager) Handle(accepted *model.AcceptedSession) {
+	manager.HandleContext(context.Background(), accepted)
+}
+
+func (manager *orderedContextManager) HandleContext(ctx context.Context, _ *model.AcceptedSession) {
+	close(manager.started)
+	<-ctx.Done()
+	select {
+	case <-manager.ingress.closed:
+		manager.observed <- true
+	default:
+		manager.observed <- false
+	}
 }
 
 func (manager *contextBlockingManager) Handle(accepted *model.AcceptedSession) {
@@ -205,6 +235,29 @@ func TestServerFatalAcceptErrorCancelsActiveAndQueuedSessions(t *testing.T) {
 				t.Fatalf("handled sessions = %v, want only first; queued=%p", handled, second)
 			}
 		})
+	}
+}
+
+func TestServerClosesIngressBeforeCancellingHandlers(t *testing.T) {
+	ingress := newIngressStub()
+	manager := &orderedContextManager{
+		ingress:  ingress,
+		started:  make(chan struct{}),
+		observed: make(chan bool, 1),
+	}
+	server := NewServer(0, ingress, manager)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.RunContext(ctx) }()
+
+	ingress.results <- acceptResult{session: &model.AcceptedSession{Target: model.Target{Address: "203.0.113.30:80"}}}
+	waitClosed(t, manager.started)
+	cancel()
+	if observed := waitValue(t, manager.observed); !observed {
+		t.Fatal("LIFE-ORDER-204 handler observed cancellation before ingress was closed")
+	}
+	if err := waitValue(t, done); err != nil {
+		t.Fatalf("LIFE-ORDER-204 RunContext: %v", err)
 	}
 }
 
