@@ -86,16 +86,19 @@ func (s *emittingSink) Append(event model.SessionEvent) {
 	s.dispatcher.Append(model.SessionEvent{Type: model.EventSessionClosed})
 }
 
-func TestDispatcherStopsAtQueuedEventBoundary(t *testing.T) {
+func TestDispatcherRejectsEventsAfterStop(t *testing.T) {
 	t.Parallel()
 
 	dispatcher := NewDispatcher()
 	collector := &collectingSink{}
-	dispatcher.Add(&emittingSink{dispatcher: dispatcher}, collector)
+	dispatcher.Add(collector)
 
 	dispatcher.Start()
 	dispatcher.Append(model.SessionEvent{Type: model.EventSessionOpened})
 	dispatcher.Stop()
+	if dispatcher.TryAppend(model.SessionEvent{Type: model.EventSessionClosed}) {
+		t.Fatal("QUEUE-DISPATCH-003 dispatcher accepted an event after Stop")
+	}
 
 	got := collector.Types()
 	want := []model.SessionEventType{
@@ -110,7 +113,7 @@ func TestDispatcherStopsAtQueuedEventBoundary(t *testing.T) {
 		}
 	}
 	if dispatcher.Dropped() != 1 {
-		t.Fatalf("expected event emitted after stop boundary to be dropped, got %d", dispatcher.Dropped())
+		t.Fatalf("QUEUE-DISPATCH-003 dropped events = %d, want 1", dispatcher.Dropped())
 	}
 }
 

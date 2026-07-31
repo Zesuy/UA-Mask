@@ -22,6 +22,7 @@ type Dispatcher struct {
 	size     int
 	running  bool
 	stopping bool
+	closed   bool
 	dropped  uint64
 	active   int
 	busy     bool
@@ -66,7 +67,7 @@ func (d *Dispatcher) Start() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if d.running {
+	if d.running || d.closed {
 		return
 	}
 
@@ -83,10 +84,12 @@ func (d *Dispatcher) Stop() {
 
 	d.mu.Lock()
 	if !d.running {
+		d.closed = true
 		d.mu.Unlock()
 		return
 	}
 	d.stopping = true
+	d.closed = true
 	d.cond.Signal()
 	d.mu.Unlock()
 
@@ -103,8 +106,13 @@ func (d *Dispatcher) TryAppend(event model.SessionEvent) bool {
 	}
 
 	d.mu.Lock()
+	if d.closed || d.stopping {
+		d.dropped++
+		d.mu.Unlock()
+		return false
+	}
 	if d.running {
-		if d.stopping || d.size == len(d.queue) {
+		if d.size == len(d.queue) {
 			d.dropped++
 			d.mu.Unlock()
 			return false
@@ -173,7 +181,6 @@ func (d *Dispatcher) loop() {
 		}
 		if d.size == 0 && d.stopping {
 			d.running = false
-			d.stopping = false
 			d.markIdleLocked()
 			d.mu.Unlock()
 			return
