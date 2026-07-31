@@ -15,6 +15,10 @@ test:
 
 stress:
 	$(GO) test -race -count=20 \
+		./internal/app \
+		./internal/ingress \
+		./internal/proxy \
+		./internal/session \
 		./internal/events \
 		./internal/state \
 		./internal/policy \
