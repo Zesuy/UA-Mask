@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -24,6 +25,11 @@ var httpMethods = []string{"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "T
 
 type Manager interface {
 	Handle(accepted *model.AcceptedSession)
+}
+
+type ContextManager interface {
+	Manager
+	HandleContext(context.Context, *model.AcceptedSession)
 }
 
 type SignalHandler interface {
@@ -74,7 +80,18 @@ func NewManager(
 }
 
 func (m *DefaultManager) Handle(accepted *model.AcceptedSession) {
+	m.HandleContext(context.Background(), accepted)
+}
+
+func (m *DefaultManager) HandleContext(ctx context.Context, accepted *model.AcceptedSession) {
 	if accepted == nil || accepted.ClientConn == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		_ = accepted.ClientConn.Close()
 		return
 	}
 
@@ -110,7 +127,7 @@ func (m *DefaultManager) Handle(accepted *model.AcceptedSession) {
 		Timeout:   m.config.DialTimeout,
 		KeepAlive: m.config.UpstreamKeepAlive,
 	}
-	upstream, err := dialer.Dial("tcp", accepted.Target.Address)
+	upstream, err := dialer.DialContext(ctx, "tcp", accepted.Target.Address)
 	if err != nil {
 		logrus.Debugf("[session] Failed to connect to %s: %v", accepted.Target.Address, err)
 		return
@@ -123,6 +140,16 @@ func (m *DefaultManager) Handle(accepted *model.AcceptedSession) {
 		return
 	}
 	sessionState.UpstreamAddr = upstreamConn.RemoteAddr().String()
+	connectionDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = accepted.ClientConn.Close()
+			_ = upstreamConn.Close()
+		case <-connectionDone:
+		}
+	}()
+	defer close(connectionDone)
 	m.emit(model.SessionEvent{
 		Type:        model.EventUpstreamConnected,
 		SessionID:   sessionState.ID,

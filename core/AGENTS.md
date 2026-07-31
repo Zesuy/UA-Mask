@@ -81,7 +81,8 @@ There is one production traffic path. Do not reintroduce a parallel processor or
 ## Runtime Lifecycle
 
 - `app.Run` owns signal handling and passes cancellation into the runtime.
-- `proxy.Server` must stop ingress first, reject new sessions, close active connections, and wait for accepted handlers.
+- `proxy.Server` must stop ingress first, reject queued sessions, propagate context cancellation to active handlers, and wait for them.
+- `session.DefaultManager` must use context-aware dialing and close both client and upstream connections on cancellation.
 - Shutdown then proceeds through `offload.Stop -> Executor.Flush/Stop -> Dispatcher.WaitIdle/Stop -> stats.Stop -> state.Stop`.
 - Do not stop the dispatcher before executor completions have emitted and projected their result events.
 - Lifecycle tests must synchronize with channels/barriers; real timeouts are hang guards only.

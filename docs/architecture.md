@@ -173,8 +173,8 @@ flowchart TB
 
 context 取消或 server 返回错误时：
 
-1. `proxy.Server` 关闭 ingress，停止接收新连接。
-2. 关闭活跃连接并等待已接收的 session handler 返回。
+1. `proxy.Server` 关闭 ingress，停止接收新连接，并丢弃 worker pool 中尚未开始处理的 session。
+2. context 传入 `session.Manager`；拨号使用 `DialContext`，取消时同时关闭 client 和 upstream，再等待已开始的 handler 返回。
 3. `offload.Coordinator.Stop()` 取消待决策 timer 并拒绝新动作。
 4. `firewall.Executor.Flush()` 完成此前入队的批次与 completion，然后停止 worker。
 5. `events.Dispatcher.WaitIdle()` 完成 result event 的状态和统计投影，然后停止分发器。

@@ -82,8 +82,13 @@ func (s *Server) runWithPool(ctx context.Context, tracker *sessionTracker, shutd
 		go func(workerID int) {
 			defer workers.Done()
 			for accepted := range sessionChan {
+				if ctx.Err() != nil {
+					closeAccepted(accepted)
+					tracker.Done(accepted)
+					continue
+				}
 				logrus.Debugf("[server] Worker %d processing connection for %s", workerID, accepted.Target.Address)
-				s.manager.Handle(accepted)
+				s.handleSession(ctx, accepted)
 				tracker.Done(accepted)
 			}
 		}(i)
@@ -118,10 +123,18 @@ func (s *Server) runDefault(ctx context.Context, tracker *sessionTracker) error 
 		}
 		go func() {
 			defer tracker.Done(accepted)
-			s.manager.Handle(accepted)
+			s.handleSession(ctx, accepted)
 		}()
 		return true
 	})
+}
+
+func (s *Server) handleSession(ctx context.Context, accepted *model.AcceptedSession) {
+	if manager, ok := s.manager.(session.ContextManager); ok {
+		manager.HandleContext(ctx, accepted)
+		return
+	}
+	s.manager.Handle(accepted)
 }
 
 func (s *Server) acceptLoop(ctx context.Context, submit func(*model.AcceptedSession) bool) error {

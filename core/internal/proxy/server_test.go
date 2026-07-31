@@ -18,25 +18,55 @@ type acceptResult struct {
 }
 
 type ingressStub struct {
-	results chan acceptResult
-	closed  chan struct{}
-	once    sync.Once
+	results   chan acceptResult
+	delivered chan *model.AcceptedSession
+	closed    chan struct{}
+	once      sync.Once
 }
 
 func newIngressStub() *ingressStub {
 	return &ingressStub{
-		results: make(chan acceptResult, 4),
-		closed:  make(chan struct{}),
+		results:   make(chan acceptResult, 4),
+		delivered: make(chan *model.AcceptedSession, 4),
+		closed:    make(chan struct{}),
 	}
 }
 
 func (stub *ingressStub) Accept() (*model.AcceptedSession, error) {
 	select {
 	case result := <-stub.results:
+		select {
+		case stub.delivered <- result.session:
+		default:
+		}
 		return result.session, result.err
 	case <-stub.closed:
 		return nil, context.Canceled
 	}
+}
+
+type contextBlockingManager struct {
+	mu      sync.Mutex
+	handled []*model.AcceptedSession
+	started chan *model.AcceptedSession
+}
+
+func (manager *contextBlockingManager) Handle(accepted *model.AcceptedSession) {
+	manager.HandleContext(context.Background(), accepted)
+}
+
+func (manager *contextBlockingManager) HandleContext(ctx context.Context, accepted *model.AcceptedSession) {
+	manager.mu.Lock()
+	manager.handled = append(manager.handled, accepted)
+	manager.mu.Unlock()
+	manager.started <- accepted
+	<-ctx.Done()
+}
+
+func (manager *contextBlockingManager) Handled() []*model.AcceptedSession {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return append([]*model.AcceptedSession(nil), manager.handled...)
 }
 
 func (stub *ingressStub) Close() error {
@@ -103,6 +133,38 @@ func TestServerRunContextReturnsFatalAcceptError(t *testing.T) {
 		t.Fatalf("LIFE-ERROR-201 RunContext error = %v, want listener failure", err)
 	}
 	waitClosed(t, ingress.closed)
+}
+
+func TestServerWorkerPoolSkipsQueuedSessionsAfterCancellation(t *testing.T) {
+	ingress := newIngressStub()
+	manager := &contextBlockingManager{started: make(chan *model.AcceptedSession, 2)}
+	server := NewServer(1, ingress, manager)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.RunContext(ctx) }()
+
+	first := &model.AcceptedSession{Target: model.Target{Address: "203.0.113.10:80"}}
+	second := &model.AcceptedSession{Target: model.Target{Address: "203.0.113.11:80"}}
+	ingress.results <- acceptResult{session: first}
+	if got := waitValue(t, manager.started); got != first {
+		t.Fatalf("LIFE-POOL-202 first handled session = %p, want %p", got, first)
+	}
+	if got := waitValue(t, ingress.delivered); got != first {
+		t.Fatalf("LIFE-POOL-202 first delivered session = %p, want %p", got, first)
+	}
+	ingress.results <- acceptResult{session: second}
+	if got := waitValue(t, ingress.delivered); got != second {
+		t.Fatalf("LIFE-POOL-202 delivered session = %p, want %p", got, second)
+	}
+
+	cancel()
+	if err := waitValue(t, done); err != nil {
+		t.Fatalf("LIFE-POOL-202 RunContext: %v", err)
+	}
+	handled := manager.Handled()
+	if len(handled) != 1 || handled[0] != first {
+		t.Fatalf("LIFE-POOL-202 handled sessions = %v, want only first", handled)
+	}
 }
 
 func waitClosed(t *testing.T, channel <-chan struct{}) {

@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"strconv"
 	"strings"
@@ -159,6 +160,64 @@ func TestManagerProcessesActiveTrafficPath(t *testing.T) {
 	})
 }
 
+func TestManagerHandleContextClosesSilentUpstream(t *testing.T) {
+	clientPeer, acceptedConn := newTCPPair(t)
+	defer clientPeer.Close()
+	defer acceptedConn.Close()
+
+	upstreamListener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("LIFE-SESSION-202 listen upstream: %v", err)
+	}
+	defer upstreamListener.Close()
+	upstreamAccepted := make(chan *net.TCPConn, 1)
+	upstreamAcceptErr := make(chan error, 1)
+	go func() {
+		conn, acceptErr := upstreamListener.AcceptTCP()
+		if acceptErr != nil {
+			upstreamAcceptErr <- acceptErr
+			return
+		}
+		upstreamAccepted <- conn
+	}()
+
+	manager, _, _, collector := newTrafficHarness(t, config.RewriteConfig{}, config.FirewallConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.HandleContext(ctx, &model.AcceptedSession{
+			ClientConn: acceptedConn,
+			Target: model.Target{
+				Address: upstreamListener.Addr().String(),
+				IP:      "127.0.0.1",
+				Port:    upstreamListener.Addr().(*net.TCPAddr).Port,
+			},
+			IngressKind: model.IngressKindRedirect,
+		})
+		close(done)
+	}()
+
+	var upstreamPeer *net.TCPConn
+	select {
+	case upstreamPeer = <-upstreamAccepted:
+	case acceptErr := <-upstreamAcceptErr:
+		t.Fatalf("LIFE-SESSION-202 accept upstream: %v", acceptErr)
+	case <-time.After(time.Second):
+		t.Fatal("LIFE-SESSION-202 upstream connection was not established")
+	}
+	defer upstreamPeer.Close()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("LIFE-SESSION-202 manager did not stop after context cancellation")
+	}
+	if got := collector.Count(model.EventSessionClosed); got != 1 {
+		t.Fatalf("LIFE-SESSION-202 closed facts = %d, want 1", got)
+	}
+}
+
 func newTrafficHarness(
 	t *testing.T,
 	rewriteConfig config.RewriteConfig,
@@ -200,4 +259,41 @@ func testSessionState(port int) model.SessionState {
 			Port:    port,
 		},
 	}
+}
+
+func newTCPPair(t *testing.T) (*net.TCPConn, *net.TCPConn) {
+	t.Helper()
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("listen TCP pair: %v", err)
+	}
+	accepted := make(chan *net.TCPConn, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		conn, err := listener.AcceptTCP()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- conn
+	}()
+	peer, err := net.DialTCP("tcp", nil, listener.Addr().(*net.TCPAddr))
+	if err != nil {
+		_ = listener.Close()
+		t.Fatalf("dial TCP pair: %v", err)
+	}
+	var server *net.TCPConn
+	select {
+	case server = <-accepted:
+	case err := <-acceptErr:
+		_ = peer.Close()
+		_ = listener.Close()
+		t.Fatalf("accept TCP pair: %v", err)
+	case <-time.After(time.Second):
+		_ = peer.Close()
+		_ = listener.Close()
+		t.Fatal("timed out accepting TCP pair")
+	}
+	_ = listener.Close()
+	return peer, server
 }
