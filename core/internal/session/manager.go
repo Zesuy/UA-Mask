@@ -149,7 +149,7 @@ func (m *DefaultManager) Handle(accepted *model.AcceptedSession) {
 	<-done
 }
 
-func (m *DefaultManager) processClientToUpstream(sessionState *model.SessionState, src *net.TCPConn, dst *net.TCPConn) {
+func (m *DefaultManager) processClientToUpstream(sessionState *model.SessionState, src net.Conn, dst net.Conn) {
 	srcReader := m.readerPool.Get().(*bufio.Reader)
 	srcReader.Reset(src)
 	defer m.readerPool.Put(srcReader)
