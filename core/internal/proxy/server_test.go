@@ -167,6 +167,47 @@ func TestServerWorkerPoolSkipsQueuedSessionsAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestServerFatalAcceptErrorCancelsActiveAndQueuedSessions(t *testing.T) {
+	for _, poolSize := range []int{0, 1} {
+		poolSize := poolSize
+		t.Run(fmt.Sprintf("LIFE-ERROR-203/pool-%d", poolSize), func(t *testing.T) {
+			ingress := newIngressStub()
+			manager := &contextBlockingManager{started: make(chan *model.AcceptedSession, 2)}
+			server := NewServer(poolSize, ingress, manager)
+			done := make(chan error, 1)
+			go func() { done <- server.RunContext(context.Background()) }()
+
+			first := &model.AcceptedSession{Target: model.Target{Address: "203.0.113.20:80"}}
+			ingress.results <- acceptResult{session: first}
+			if got := waitValue(t, manager.started); got != first {
+				t.Fatalf("first handled session = %p, want %p", got, first)
+			}
+			if got := waitValue(t, ingress.delivered); got != first {
+				t.Fatalf("first delivered session = %p, want %p", got, first)
+			}
+
+			var second *model.AcceptedSession
+			if poolSize > 0 {
+				second = &model.AcceptedSession{Target: model.Target{Address: "203.0.113.21:80"}}
+				ingress.results <- acceptResult{session: second}
+				if got := waitValue(t, ingress.delivered); got != second {
+					t.Fatalf("queued delivered session = %p, want %p", got, second)
+				}
+			}
+
+			ingress.results <- acceptResult{err: errors.New("listener failed")}
+			err := waitValue(t, done)
+			if err == nil || !strings.Contains(err.Error(), "listener failed") {
+				t.Fatalf("RunContext error = %v, want listener failure", err)
+			}
+			handled := manager.Handled()
+			if len(handled) != 1 || handled[0] != first {
+				t.Fatalf("handled sessions = %v, want only first; queued=%p", handled, second)
+			}
+		})
+	}
+}
+
 func waitClosed(t *testing.T, channel <-chan struct{}) {
 	t.Helper()
 	select {

@@ -41,12 +41,14 @@ func (s *Server) RunContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	sessionCtx, cancelSessions := context.WithCancel(ctx)
 
 	tracker := newSessionTracker()
 	var shutdownOnce sync.Once
 	shutdown := func() {
 		shutdownOnce.Do(func() {
 			_ = s.ingress.Close()
+			cancelSessions()
 			tracker.CloseAll()
 		})
 	}
@@ -62,9 +64,9 @@ func (s *Server) RunContext(ctx context.Context) error {
 	logrus.Infof("UA-Mask ingress server ready")
 	var runErr error
 	if s.poolSize > 0 {
-		runErr = s.runWithPool(ctx, tracker, shutdown)
+		runErr = s.runWithPool(sessionCtx, tracker, shutdown)
 	} else {
-		runErr = s.runDefault(ctx, tracker)
+		runErr = s.runDefault(sessionCtx, tracker)
 	}
 	shutdown()
 	close(watchDone)
