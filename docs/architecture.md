@@ -7,9 +7,9 @@
 - TCP 会话、HTTP 探测、UA 改写的热路径
 - 事件、目标画像、策略、流量卸载之间的关系
 - 统计、LuCI 与防火墙 set 的集成方式
-- 当前代码中容易误读的旧路径残留
+- SIGINT/SIGTERM 下的有序停止语义
 
-当前架构的核心变化是：`proxy` 不再是完整业务中心，真正的热路径已经迁移到 `session`；防火墙绕过也不再由旧的 `firewall.DecisionEngine` 主导，而是通过 `events -> state -> policy -> offload -> firewall.Executor` 这一条事件驱动管线完成。
+当前架构只有一条生产流量路径：`proxy` 只负责接收与调度连接，业务热路径位于 `session`；目标级防火墙绕过统一通过 `events -> state -> policy -> offload -> firewall.Executor` 管线完成。旧的 `proxy.Processor` 与 `firewall.DecisionEngine` 已删除。
 
 ## 1. 总览
 
@@ -79,13 +79,14 @@ UA-Mask/
 
 `core/cmd/UAmask/main.go` 是很薄的进程入口，只保存版本号并调用 `app.Run(version)`。
 
-`app.Run()` 做三件事：
+`app.Run()` 负责：
 
 1. 调用 `config.NewFromFlags()` 解析进程参数，并按需加载版本化 JSON。
 2. 按 `defaults -> JSON -> 显式 legacy flags -> normalize -> validate -> compile` 生成最终配置。
 3. 处理 `-v`、`-check-config`、`-dump-effective-config` 等进程动作。
 4. 应用 GC 参数并初始化 logrus。
-5. 调用 `NewRuntime(cfg, version)` 装配所有运行时组件，然后执行 `runtime.Run()`。
+5. 调用 `NewRuntime(cfg, version)` 装配所有运行时组件。
+6. 监听 SIGINT/SIGTERM，并用对应 context 执行 `runtime.RunContext()`。
 
 ```mermaid
 sequenceDiagram
@@ -102,8 +103,8 @@ sequenceDiagram
     App->>App: setupLogging()
     App->>Runtime: NewRuntime(cfg, version)
     Runtime-->>App: Runtime
-    App->>Runtime: Runtime.Run()
-    Runtime->>Server: server.Run()
+    App->>Runtime: Runtime.RunContext(ctx)
+    Runtime->>Server: server.RunContext(ctx)
 ```
 
 `app.NewRuntime()` 是当前最重要的代码图谱入口。它会创建：
@@ -161,16 +162,25 @@ flowchart TB
     Session --> Server
 ```
 
-`Runtime.Run()` 的生命周期顺序是：
+`Runtime.RunContext()` 的启动顺序是：
 
 1. 打印配置。
 2. 启动 `firewall.Executor` worker。
 3. 启动 `state.Store` 清理 worker。
 4. 启动 `stats.FileReporter` 落盘 worker。
 5. 启动 `events.Dispatcher` 事件 worker。
-6. 最后进入 `proxy.Server.Run()` 的 Accept 循环。
+6. 最后进入 `proxy.Server.RunContext()` 的 Accept 循环。
 
-停止时按 `offload -> firewall.Executor -> Dispatcher -> stats -> state` 的顺序关闭，确保防火墙实际执行结果能在事件分发器停止前完成投影。
+context 取消或 server 返回错误时：
+
+1. `proxy.Server` 关闭 ingress，停止接收新连接。
+2. 关闭活跃连接并等待已接收的 session handler 返回。
+3. `offload.Coordinator.Stop()` 取消待决策 timer 并拒绝新动作。
+4. `firewall.Executor.Flush()` 完成此前入队的批次与 completion，然后停止 worker。
+5. `events.Dispatcher.WaitIdle()` 完成 result event 的状态和统计投影，然后停止分发器。
+6. 最后停止 stats reporter 和 profile store。
+
+这个顺序保证“停止接收流量”先于“停止控制面”，并且防火墙执行结果不会因为关闭顺序而丢失。
 
 ## 4. 配置模型
 
@@ -619,15 +629,13 @@ sequenceDiagram
 
 当启用 `proxy_host` 时，init 脚本还会用 GID 规则避免 UA-Mask 自身流量和 OpenClash 流量再次被重定向。
 
-## 14. 当前容易误读的旧路径
+## 14. 唯一生产路径与阅读顺序
 
-当前仓库里仍有一些旧重构阶段留下的模块，它们不是主运行路径：
+旧的 `proxy.Processor`、`firewall.DecisionEngine` 和直接写防火墙的 sink 已删除。业务行为不得再绕过 `session -> event/state/policy/offload` 边界增加第二条路径。
 
-- `core/internal/proxy/processor.go`
-- `core/internal/firewall/decision_engine.go`
-- `core/internal/firewall/sinks.go`
+`proxy.Server` 只负责 Accept、worker pool、活跃 session 跟踪和 context 关闭；HTTP 检测、rewrite、drop、fallback 和事件发射全部由 `session.Manager` 负责。`firewall` 只保留系统执行边界，目标状态与决策不放回该包。
 
-根据当前 `app.NewRuntime()` 的装配，主路径没有创建 `proxy.Processor`，也没有创建 `firewall.DecisionEngine`。`proxy.Server` 接收连接后交给 `session.Manager`；非 HTTP 与 UA 白名单卸载由 `events/state/policy/offload` 管线完成。
+建立代码图谱时按以下顺序阅读：
 
 阅读代码时，应优先从这些入口建立图谱：
 

@@ -74,7 +74,17 @@ Do not make the current connection wait for target profile aggregation unless a 
 - `internal/policy`: decisions only. It should not mutate profile state or execute offload.
 - `internal/offload`: explicit action execution and factual result events.
 - `internal/rewrite`: User-Agent rewrite rules only. It must not directly enqueue firewall or offload actions.
-- `internal/firewall`: legacy target offload execution primitives. New orchestration should go through `internal/offload`.
+- `internal/firewall`: system execution boundary for batching ipset/nfset writes. It must not own target profiles or offload policy.
+
+There is one production traffic path. Do not reintroduce a parallel processor or decision engine beside `session -> events/state/policy/offload`.
+
+## Runtime Lifecycle
+
+- `app.Run` owns signal handling and passes cancellation into the runtime.
+- `proxy.Server` must stop ingress first, reject new sessions, close active connections, and wait for accepted handlers.
+- Shutdown then proceeds through `offload.Stop -> Executor.Flush/Stop -> Dispatcher.WaitIdle/Stop -> stats.Stop -> state.Stop`.
+- Do not stop the dispatcher before executor completions have emitted and projected their result events.
+- Lifecycle tests must synchronize with channels/barriers; real timeouts are hang guards only.
 
 ## Testing Expectations
 
