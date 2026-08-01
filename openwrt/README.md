@@ -20,6 +20,11 @@ OpenWrt 包保留两种构建模式：
   --platform openwrt \
   --arch arm64 \
   --sdk-dir /path/to/openwrt-sdk \
+  --openwrt-version 23.05.5 \
+  --target armsr \
+  --subtarget armv8 \
+  --package-arch aarch64_generic \
+  --package-format ipk \
   --version 0.4.3-canary.example \
   --output-dir dist
 ```
@@ -28,4 +33,6 @@ OpenWrt 包保留两种构建模式：
 
 为避免 artifact 与 commit 对不上，脚本默认拒绝 dirty worktree。`--allow-dirty` 只用于本地调试，并会在 metadata 中明确记录 `"dirty": true`；可交付 Canary 和 release 不得使用该参数。
 
-已经核验的 SDK URL、SHA256、target/subtarget、Go 架构和包格式记录在 `.github/openwrt-sdk-matrix.json`。首个 Canary 条目是 OpenWrt 23.05.5 `x86/64`，同时适用于对应的 x86_64 QEMU 和实体机。
+已核验的 SDK URL、SHA256、target/subtarget、Go 架构和包格式记录在 `.github/openwrt-sdk-matrix.json`。矩阵以 OpenWrt 23.05.5 IPK 通道覆盖本次已验证的设备代际，以 25.12.5 APK 通道覆盖新包管理器代际；每个条目都只接受官方固定 release SDK。
+
+Canary 和 PR build 的二进制版本会包含提交标识。APK 的上游版本格式只接受数值点分版本加 `-rN` release，因此非 release APK 的包版本保持为 `VERSION`；其完整二进制版本、commit、SDK target 和 SHA256 都写入同名 `.metadata.json`，且不会被发布到 GitHub Release。
