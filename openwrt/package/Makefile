@@ -67,6 +67,11 @@ endef
 define Build/Compile
 	true
 endef
+
+# The release builder has already stripped the static Go binary with
+# -ldflags "-s -w". OpenWrt's sstrip corrupts its section-header string table
+# when applied a second time, so prebuilt mode must preserve the ELF verbatim.
+RSTRIP:=:
 endif
 
 # 4. nftables 包 conffiles
@@ -80,9 +85,9 @@ define Package/UAmask/install/assets
 	$(INSTALL_DIR) $(1)/etc/config/
 	$(INSTALL_CONF) $(UAMASK_SOURCE_DIR)/openwrt/root/etc/config/UAmask $(1)/etc/config/UAmask
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi/
-	$(INSTALL_CONF) $(UAMASK_SOURCE_DIR)/openwrt/luci/model/cbi/UAmask.lua $(1)/usr/lib/lua/luci/model/cbi/UAmask.lua
+	$(INSTALL_DATA) $(UAMASK_SOURCE_DIR)/openwrt/luci/model/cbi/UAmask.lua $(1)/usr/lib/lua/luci/model/cbi/UAmask.lua
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller/
-	$(INSTALL_CONF) $(UAMASK_SOURCE_DIR)/openwrt/luci/controller/UAmask.lua $(1)/usr/lib/lua/luci/controller/UAmask.lua
+	$(INSTALL_DATA) $(UAMASK_SOURCE_DIR)/openwrt/luci/controller/UAmask.lua $(1)/usr/lib/lua/luci/controller/UAmask.lua
 endef
 
 ifeq ($(strip $(UAMASK_PREBUILT)),)
