@@ -211,7 +211,7 @@ jobs:
           PY
           case "$EXPECTED_FORMAT" in
             ipk)
-              tar -tzf "$package" | grep -Fx './usr/bin/UAmask'
+              tar -xOf "$package" ./data.tar.gz | tar -tzf - | grep -Fx './usr/bin/UAmask'
               ;;
             apk)
               "$SDK_DIR/staging_dir/host/bin/apk" verify --allow-untrusted "$package"
