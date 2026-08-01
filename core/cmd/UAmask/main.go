@@ -6,7 +6,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var version = "0.4.3"
+// version is replaced by release builds through -ldflags. Keeping the source
+// default explicit avoids accidentally presenting an unversioned local build
+// as an official release.
+var version = "dev"
 
 func main() {
 	if err := app.Run(version); err != nil {

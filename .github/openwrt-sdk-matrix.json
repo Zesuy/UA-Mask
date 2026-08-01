@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "openwrt-23.05.5-x86-64",
+      "channel": "legacy",
+      "openwrt": "23.05.5",
+      "target": "x86",
+      "subtarget": "64",
+      "package_arch": "x86_64",
+      "package_format": "ipk",
+      "goos": "linux",
+      "goarch": "amd64",
+      "build_arch": "amd64",
+      "sdk_url": "https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz",
+      "sdk_sha256": "9e5b6813a3f810123391f5f3ea10dfd1c14be1a880f410c70ec4424bbd1573d2"
+    }
+  ]
+}
