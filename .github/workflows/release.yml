@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Canary version; defaults to VERSION-canary.SHORT_SHA
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.context.outputs.version }}
+      commit: ${{ steps.context.outputs.commit }}
+      publish: ${{ steps.context.outputs.publish }}
+      tag: ${{ steps.context.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate version
+        id: context
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          source_version=$(tr -d '\r\n' < VERSION)
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag=${GITHUB_REF#refs/tags/}
+            version=${tag#v}
+            if [ "$tag" = "$version" ] || [ "$version" != "$source_version" ]; then
+              echo "tag $tag must be v$source_version" >&2
+              exit 1
+            fi
+            publish=true
+          else
+            tag=
+            version="$INPUT_VERSION"
+            if [ -z "$version" ]; then
+              version="$source_version-canary.${GITHUB_SHA::7}"
+            fi
+            publish=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  go-binaries:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - "386"
+          - arm64
+          - armv5
+          - armv6
+          - armv7
+          - mips-softfloat
+          - mipsle-softfloat
+          - riscv64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+
+      - name: Build static binary
+        env:
+          BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          ./scripts/build-release.sh \
+            --platform linux \
+            --arch '${{ matrix.arch }}' \
+            --version "$BUILD_VERSION" \
+            --commit "$BUILD_COMMIT" \
+            --output-dir 'dist/${{ matrix.arch }}'
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 14
+          path: dist/${{ matrix.arch }}/*
+
+  openwrt-packages:
+    needs: prepare
+    uses: ./.github/workflows/openwrt-sdk.yml
+    with:
+      selection: all
+      version: ${{ needs.prepare.outputs.version }}
+      commit: ${{ needs.prepare.outputs.commit }}
+      retention-days: 14
+
+  publish:
+    if: needs.prepare.outputs.publish == 'true'
+    needs:
+      - prepare
+      - go-binaries
+      - openwrt-packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate combined checksums
+        run: |
+          cd release-assets
+          find . -maxdepth 1 -type f \
+            \( -name 'UAmask-linux-*' -o -name 'UAmask_*.ipk' -o -name 'UAmask-*.apk' \) \
+            ! -name '*.sha256' ! -name '*.json' \
+            -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          test -s SHA256SUMS
+
+      - name: Publish immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mapfile -d '' files < <(find release-assets -maxdepth 1 -type f -print0 | sort -z)
+          test "${#files[@]}" -gt 0
+          gh release create "$RELEASE_TAG" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "UA-Mask $RELEASE_VERSION" \
+            --generate-notes
+

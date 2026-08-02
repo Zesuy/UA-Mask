@@ -4,82 +4,94 @@ on:
   pull_request:
     paths:
       - "core/**"
-      - "openwrt/root/etc/init.d/UAmask"
-      - "openwrt/root/etc/config/**"
-      - "openwrt/luci/**"
-      - "openwrt/package/Makefile"
-      - "openwrt/tests/**"
-      - "docs/config.example.json"
+      - "openwrt/**"
+      - "scripts/**"
+      - "VERSION"
       - "go.work"
-      - ".github/workflows/core-ci.yml"
+      - "docs/config.example.json"
+      - ".github/openwrt-sdk-matrix.json"
+      - ".github/workflows/**"
   push:
     branches:
       - main
       - master
     paths:
       - "core/**"
-      - "openwrt/root/etc/init.d/UAmask"
-      - "openwrt/root/etc/config/**"
-      - "openwrt/luci/**"
-      - "openwrt/package/Makefile"
-      - "openwrt/tests/**"
-      - "docs/config.example.json"
+      - "openwrt/**"
+      - "scripts/**"
+      - "VERSION"
       - "go.work"
-      - ".github/workflows/core-ci.yml"
+      - "docs/config.example.json"
+      - ".github/openwrt-sdk-matrix.json"
+      - ".github/workflows/**"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: core-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test-core:
+  build-context:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: core
-
+    outputs:
+      version: ${{ steps.context.outputs.version }}
+      commit: ${{ steps.context.outputs.commit }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate build inputs
+        id: context
+        run: |
+          sh -n scripts/build-release.sh
+          jq -e '.schema_version == 1 and (.entries | length > 0)' .github/openwrt-sdk-matrix.json >/dev/null
+          version="$(tr -d '\r\n' < VERSION)-ci.${GITHUB_SHA::7}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: core/go.mod
-          cache-dependency-path: |
-            core/go.sum
-            go.work
-
+          cache-dependency-path: core/go.sum
       - name: Download dependencies
         run: go mod download
-
       - name: Format check
         run: make fmt-check
-
       - name: Vet
         run: make vet
+      - name: Build
+        run: make build
 
+  unit-coverage:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
       - name: Unit tests with coverage
         run: |
           set -o pipefail
           go test -json -covermode=atomic -coverprofile=coverage.out ./... | tee test-results.json
-
-      - name: Race tests
-        run: go test -race -count=1 ./...
-
-      - name: Deterministic core stress tests
-        run: make stress
-
-      - name: Build
-        run: make build
-
-      - name: OpenWrt config transport check
-        run: make shell-check
-        env:
-          TEST_ARTIFACT_DIR: ${{ github.workspace }}/core/test-artifacts/openwrt
-
-      - name: BUILD-TRACE-001 Record test metadata
+      - name: BUILD-TRACE-001 record test metadata
         if: always()
         run: |
           python3 - "$GITHUB_SHA" "$(go version)" "$(go env GOOS)" "$(go env GOARCH)" <<'PY' > test-metadata.json
@@ -101,17 +113,14 @@ jobs:
           }, sys.stdout, indent=2)
           sys.stdout.write("\n")
           PY
-
       - name: Coverage summary
+        if: always()
         run: |
-          echo "## Core coverage" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
           go tool cover -func=coverage.out | tee coverage.txt
-          total_line=$(tail -n 1 coverage.txt)
-          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "$total_line" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
-
+          echo "## Core coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 1 coverage.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -123,15 +132,120 @@ jobs:
             core/coverage.out
             core/coverage.txt
             core/test-metadata.json
-            core/test-artifacts/**
 
-      - name: Build linux amd64 binary
-        run: |
-          mkdir -p dist
-          GOOS=linux GOARCH=amd64 go build -o dist/UAmask-linux-amd64 ./cmd/UAmask
+  race-stress:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - name: Full race suite
+        run: go test -race -count=1 ./...
+      - name: Deterministic stress suite
+        run: make stress
 
-      - name: Upload binary artifact
+  openwrt-contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - name: OpenWrt config and procd contracts
+        run: make shell-check
+        env:
+          TEST_ARTIFACT_DIR: ${{ github.workspace }}/core/test-artifacts/openwrt
+      - name: Upload OpenWrt failure evidence
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: core-linux-amd64
-          path: core/dist/UAmask-linux-amd64
+          name: openwrt-contract-failure
+          if-no-files-found: warn
+          path: core/test-artifacts/openwrt/**
+
+  go-cross-build:
+    needs: build-context
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - "386"
+          - arm64
+          - armv5
+          - armv6
+          - armv7
+          - mips-softfloat
+          - mipsle-softfloat
+          - riscv64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - name: Cross-build static binary
+        env:
+          BUILD_VERSION: ${{ needs.build-context.outputs.version }}
+          BUILD_COMMIT: ${{ needs.build-context.outputs.commit }}
+        run: |
+          ./scripts/build-release.sh \
+            --platform linux \
+            --arch '${{ matrix.arch }}' \
+            --version "$BUILD_VERSION" \
+            --commit "$BUILD_COMMIT" \
+            --output-dir 'dist/${{ matrix.arch }}'
+      - name: Upload cross-build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+          path: dist/${{ matrix.arch }}/*
+
+  openwrt-sdk-smoke:
+    needs: build-context
+    uses: ./.github/workflows/openwrt-sdk.yml
+    with:
+      selection: smoke
+      version: ${{ needs.build-context.outputs.version }}
+      commit: ${{ needs.build-context.outputs.commit }}
+      retention-days: 7
+
+  test-core:
+    if: always()
+    needs:
+      - build-context
+      - quality
+      - unit-coverage
+      - race-stress
+      - openwrt-contract
+      - go-cross-build
+      - openwrt-sdk-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all required jobs passed
+        run: |
+          test '${{ needs.build-context.result }}' = success
+          test '${{ needs.quality.result }}' = success
+          test '${{ needs.unit-coverage.result }}' = success
+          test '${{ needs.race-stress.result }}' = success
+          test '${{ needs.openwrt-contract.result }}' = success
+          test '${{ needs.go-cross-build.result }}' = success
+          test '${{ needs.openwrt-sdk-smoke.result }}' = success
