@@ -70,7 +70,7 @@ test.describe.serial('UA-Mask product behavior', () => {
     // The implementation schedules a five-second poll. Allow bounded host/QEMU
     // scheduling jitter without turning a slow guest into a product failure.
     expect(interval).toBeLessThanOrEqual(7000);
-    expect(telemetry.maxUbusInFlight).toBeLessThanOrEqual(1);
+    expect(telemetry.maxStatusInFlight).toBeLessThanOrEqual(1);
     await page.goto('/cgi-bin/luci/admin/status/overview');
     const detachedCount = starts.length;
     await page.waitForTimeout(5500);

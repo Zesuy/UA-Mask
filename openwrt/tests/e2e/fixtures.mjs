@@ -22,6 +22,17 @@ export const test = base.extend({
     const requests = [];
     let ubusInFlight = 0;
     let maxUbusInFlight = 0;
+    let statusInFlight = 0;
+    let maxStatusInFlight = 0;
+
+    function isUbusRequest(request) {
+      return new URL(request.url()).pathname.includes('/ubus/');
+    }
+
+    function isStatusRequest(request) {
+      const payload = request.postData() || '';
+      return isUbusRequest(request) && payload.includes('/usr/libexec/uamask-luci') && payload.includes('status');
+    }
 
     page.on('pageerror', error => pageErrors.push(String(error)));
     page.on('console', message => {
@@ -31,15 +42,20 @@ export const test = base.extend({
     page.on('request', request => {
       const url = new URL(request.url());
       requests.push({ phase: 'start', method: request.method(), url: `${url.origin}${url.pathname}` });
-      if (url.pathname.includes('/ubus/')) {
+      if (isUbusRequest(request)) {
         ubusInFlight++;
         maxUbusInFlight = Math.max(maxUbusInFlight, ubusInFlight);
       }
+      if (isStatusRequest(request)) {
+        statusInFlight++;
+        maxStatusInFlight = Math.max(maxStatusInFlight, statusInFlight);
+      }
     });
     const finish = request => {
-      const url = new URL(request.url());
-      if (url.pathname.includes('/ubus/'))
+      if (isUbusRequest(request))
         ubusInFlight = Math.max(0, ubusInFlight - 1);
+      if (isStatusRequest(request))
+        statusInFlight = Math.max(0, statusInFlight - 1);
     };
     page.on('requestfinished', finish);
     page.on('requestfailed', request => {
@@ -54,6 +70,7 @@ export const test = base.extend({
       failedResources,
       requests,
       get maxUbusInFlight() { return maxUbusInFlight; },
+      get maxStatusInFlight() { return maxStatusInFlight; },
       reset() {
         pageErrors.length = 0;
         consoleErrors.length = 0;
@@ -61,6 +78,8 @@ export const test = base.extend({
         requests.length = 0;
         ubusInFlight = 0;
         maxUbusInFlight = 0;
+        statusInFlight = 0;
+        maxStatusInFlight = 0;
       }
     };
     await use(telemetry);
@@ -72,6 +91,7 @@ export const test = base.extend({
       consoleErrors,
       failedResources,
       maxUbusInFlight,
+      maxStatusInFlight,
       requests
     };
     const outputDir = path.join(process.env.E2E_RUN_DIR, 'telemetry');
