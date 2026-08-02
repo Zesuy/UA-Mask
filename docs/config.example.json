@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "listen": {
+    "port": 12032,
+    "dial_timeout": "30s",
+    "client_keep_alive": "3m",
+    "upstream_keep_alive": "3m"
+  },
+  "rewrite": {
+    "user_agent": "FFF",
+    "mode": "keywords",
+    "keywords": [
+      "Windows",
+      "Linux",
+      "Android",
+      "iPhone",
+      "Macintosh",
+      "iPad",
+      "OpenHarmony"
+    ],
+    "whitelist": [],
+    "pattern": "(iPhone|iPad|Android|Macintosh|Windows|Linux)",
+    "partial_replace": false
+  },
+  "firewall": {
+    "backend": "nft",
+    "set_name": "UAmask_bypass_set",
+    "ua_whitelist": [],
+    "drop_on_match": false,
+    "whitelist_timeout": "24h",
+    "non_http": {
+      "enabled": false,
+      "threshold": 5,
+      "decision_delay": "60s",
+      "http_cooldown": "1h",
+      "timeout": "8h",
+      "cleanup_interval": "10m"
+    }
+  },
+  "observe": {
+    "log_level": "info",
+    "log_file": "/tmp/UAmask/UAmask.log",
+    "stats_file": "/tmp/UAmask.stats",
+    "stats_interval": "5s"
+  },
+  "performance": {
+    "profile": "medium",
+    "cache_size": 3000,
+    "buffer_size": 8192,
+    "pool_size": 500,
+    "gc_percent": 100
+  }
+}

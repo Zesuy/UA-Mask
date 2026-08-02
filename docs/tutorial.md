@@ -274,6 +274,8 @@ iptables 用户：请先安装 ipset。
 - “Steam 下载 UA 泄露担忧”：别启用“UA 关键词白名单”或仅在下载时短时启用；或不用 set 卸载。
 - “运行统计不更新”：服务需运行一段时间才生成 /tmp/UAmask.stats；先确认进程与日志。
 - “启动失败”：确认 /usr/bin/UAmask 存在；若启用流量卸载，iptables 机型需安装 ipset。
+- “配置校验失败”：OpenWrt 会从 UCI 生成 `/var/run/UAmask/config.json`，可执行 `/usr/bin/UAmask -check-config -config /var/run/UAmask/config.json` 查看校验结果。
+- 查看 Go core 最终生效配置：`/usr/bin/UAmask -dump-effective-config -config /var/run/UAmask/config.json`。该 JSON 是运行时生成文件，请修改 UCI/LuCI，而不是直接编辑它。
 
 ---
 

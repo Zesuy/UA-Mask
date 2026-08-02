@@ -1,0 +1,543 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=99
+STOP=90 # 确保在防火墙重载前停止
+
+NAME="${NAME:-UAmask}"
+PROG="${PROG:-/usr/bin/$NAME}"
+PID_FILE="/var/run/$NAME.pid"
+CORE_CONFIG_DIR="${CORE_CONFIG_DIR:-/var/run/$NAME}"
+CORE_CONFIG_PATH="$CORE_CONFIG_DIR/config.json"
+JSHN_LIB="${JSHN_LIB:-/usr/share/libubox/jshn.sh}"
+
+# --- NFT (fw4) 变量 ---
+FW_CONFIG_NAME="UAmask" # 防火墙 UCI 规则的名称
+NFT_PATH="/tmp/UAmask_rules.nft" # .nft 文件的路径 (使用 /tmp/)
+
+# --- IPT (fw3) 变量 ---
+IPT="iptables"
+CHAIN_PREROUTING="UAmask_prerouting"
+CHAIN_OUTPUT="UAmask_output"
+
+IPSET_NAME="UAmask_bypass_set"
+
+# --- 防火墙检测 ---
+FW_TYPE=""
+
+detect_firewall() {
+    if command -v fw4 >/dev/null 2>&1; then
+        FW_TYPE="nft"
+    else
+        FW_TYPE="ipt"
+    fi
+}
+
+# 脚本加载时执行防火墙检测
+detect_firewall
+
+# NFTABLES (fw4) 函数
+
+# 仅清理规则和 uci，不重载 (NFT helper)
+unset_firewall_rules_nft() {
+    rm -f "${NFT_PATH}" # 清理生成的规则文件
+    uci -q delete firewall.${FW_CONFIG_NAME}
+    uci commit firewall
+}
+
+# 清理防火墙规则并重载 (NFT)
+unset_firewall_nft() {
+    logger -t "$NAME" "Removing firewall rules (nft)..."
+    unset_firewall_rules_nft
+    nft delete chain inet fw4 UAmask_prerouting_before 2>/dev/null || true
+    nft delete chain inet fw4 UAmask_output_after 2>/dev/null || true
+    nft delete set inet fw4 ${IPSET_NAME} 2>/dev/null || true
+    fw4 reload >/dev/null 2>&1
+    logger -t "$NAME" "Firewall rules removed (nft)."
+}
+
+# 自动管理防火墙规则 (NFT)
+set_firewall_nft() {
+    # 1. 确保旧规则被彻底清除
+    unset_firewall_rules_nft
+
+    # 2. 从 UCI 读取配置
+    config_load "$NAME"
+    local port
+    local iface_list
+    local bypass_gid
+    local bypass_ports_list
+    local bypass_ips_list
+    local force_replace
+    local proxy_host
+    local enable_firewall_set
+
+    config_get port "main" "port" "12032"
+    config_get iface_list "main" "iface" "br-lan"
+    config_get bypass_gid "main" "bypass_gid" "65533"
+    config_get bypass_ports_list "main" "bypass_ports" ""
+    config_get bypass_ips_list "main" "bypass_ips" ""
+    config_get_bool proxy_host "main" "proxy_host" ""
+    config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
+
+    # 3. 格式化接口
+    local nft_ifaces
+    set -- $iface_list
+    if [ "$#" -eq 1 ]; then
+        nft_ifaces="\"$1\"" # 单个接口
+    else
+        nft_ifaces="{ $(echo "$iface_list" | sed -e 's/ /", "/g' -e 's/^/"/' -e 's/$/"/') }" # 多个接口
+    fi
+
+    # 4. 格式化豁免 IPs
+    local nft_ips_rule
+    if [ -n "$bypass_ips_list" ]; then
+        local nft_ips
+        nft_ips="{ $(echo "$bypass_ips_list" | sed -e 's/ /, /g') }"
+        nft_ips_rule="ip daddr != $nft_ips \\"
+    else
+        nft_ips_rule="# No bypass IPs configured"
+    fi
+
+    # 5. 格式化豁免 Ports
+    local nft_ports_rule
+    if [ -n "$bypass_ports_list" ]; then
+        local nft_ports
+        nft_ports="{ $(echo "$bypass_ports_list" | sed -e 's/ /, /g') }"
+        nft_ports_rule="tcp dport != $nft_ports \\"
+    else
+        nft_ports_rule="# No bypass ports configured"
+    fi
+
+    > "${NFT_PATH}"
+    if [ "$enable_firewall_set" = "1" ] && ! command -v nft >/dev/null 2>&1; then
+        logger -t "$NAME" "Error: 'nft' command (nftables) is not installed. Domain bypass disabled."
+        enable_firewall_set="0"
+    fi
+
+    if [ "$enable_firewall_set" = "1" ]; then
+        logger -t "$NAME" "Ensuring nftables set '${IPSET_NAME}' exists..."
+        nft add set inet fw4 ${IPSET_NAME} "{ type ipv4_addr . inet_service ; timeout 10m ;}"
+        if [ $? -ne 0 ]; then
+             logger -t "$NAME" "Error: Failed to create nftables set '${IPSET_NAME}'. Domain bypass disabled."
+             enable_firewall_set="0"
+        fi
+    fi
+
+    # 6. 动态写入 .nft 文件
+cat > "${NFT_PATH}" << EOF
+chain UAmask_prerouting_before {
+    type nat hook prerouting priority dstnat - 1;
+    
+    $( [ "$enable_firewall_set" = "1" ] && echo "iifname $nft_ifaces ip protocol tcp ip daddr . tcp dport @$IPSET_NAME return" )
+
+    iifname $nft_ifaces ip protocol tcp \\
+    $nft_ips_rule
+    $nft_ports_rule
+    redirect to :$port
+}
+
+EOF
+
+    if [ "$proxy_host" = "1" ]; then
+cat >> "${NFT_PATH}" << EOF
+
+chain UAmask_output_after {
+    type nat hook output priority -100;
+
+    $( [ "$enable_firewall_set" = "1" ] && echo "ip protocol tcp ip daddr . tcp dport @$IPSET_NAME return" )
+
+    ip protocol tcp \\
+    # 豁免局域网、环回、保留地址等
+    $nft_ips_rule
+    # 豁免端口
+    $nft_ports_rule
+    # 豁免 UAmask 自己的流量
+    # 同时豁免 OpenClash 的流量 (GID 65534)，防止循环
+    meta skgid != { $bypass_gid, 65534 } \\
+    redirect to :$port
+}
+
+EOF
+        logger -t "$NAME" "proxy_host is enabled. Added UAmask_output_after chain."
+    else
+        logger -t "$NAME" "proxy_host is disabled. Skipping UAmask_output_after chain."
+    fi
+    logger -t "$NAME" "Generated nftables rules at ${NFT_PATH}"
+    # 7. 注册防火墙规则
+    uci set firewall.${FW_CONFIG_NAME}="include"
+    uci set firewall.${FW_CONFIG_NAME}.type="nftables"
+    uci set firewall.${FW_CONFIG_NAME}.path="${NFT_PATH}"
+    uci set firewall.${FW_CONFIG_NAME}.enabled="1"
+    uci commit firewall
+    nft delete chain inet fw4 UAmask_prerouting_before 2>/dev/null || true
+    nft delete chain inet fw4 UAmask_output_after 2>/dev/null || true
+    fw4 reload >/dev/null 2>&1
+    logger -t "$NAME" "Firewall rules applied (nft)."
+}
+
+# IPTABLES (fw3) 函数
+
+# 清理防火墙规则并重载 (IPT)
+unset_firewall_ipt() {
+    logger -t "$NAME" "Removing firewall rules (iptables)..."
+    
+    # 循环尝试删除跳转规则，直到成功或失败
+    while $IPT -t nat -D PREROUTING -j $CHAIN_PREROUTING 2>/dev/null; do :; done
+    while $IPT -t nat -D OUTPUT -j $CHAIN_OUTPUT 2>/dev/null; do :; done
+
+
+    $IPT -t nat -F $CHAIN_PREROUTING 2>/dev/null || true
+    $IPT -t nat -X $CHAIN_PREROUTING 2>/dev/null || true
+    
+    $IPT -t nat -F $CHAIN_OUTPUT 2>/dev/null || true
+    $IPT -t nat -X $CHAIN_OUTPUT 2>/dev/null || true
+    
+    ipset destroy "$IPSET_NAME" 2>/dev/null || true
+
+    /etc/init.d/firewall reload >/dev/null 2>&1
+    logger -t "$NAME" "Firewall rules removed (iptables)."
+}
+
+# 自动管理防火墙规则 (IPT)
+set_firewall_ipt() {
+    # 1. 确保旧规则被彻底清除
+    unset_firewall_ipt
+
+    # 2. 从 UCI 读取配置 (此部分不变)
+    config_load "$NAME"
+    local port
+    local iface_list
+    local bypass_gid
+    local bypass_ports_list
+    local bypass_ips_list
+    local proxy_host
+    local enable_firewall_set
+
+    config_get port "main" "port" "12032"
+    config_get iface_list "main" "iface" "br-lan"
+    config_get bypass_gid "main" "bypass_gid" "65533"
+    config_get bypass_ports_list "main" "bypass_ports" ""
+    config_get bypass_ips_list "main" "bypass_ips" ""
+    config_get_bool proxy_host "main" "proxy_host" ""
+
+    config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
+    if [ "$enable_firewall_set" = "1" ]; then
+        if ! command -v ipset >/dev/null 2>&1; then
+            logger -t "$NAME" "Error: 'ipset' package is not installed. Domain bypass disabled."
+            enable_firewall_set="0"
+        else
+            logger -t "$NAME" "Creating ipset '$IPSET_NAME' for domain bypass..."
+            ipset create "$IPSET_NAME" hash:ip,port timeout 600 -exist
+        fi
+    fi
+    # --- IPTABLES 规则设置 ---
+
+    # 3. 创建自定义链
+    $IPT -t nat -N $CHAIN_PREROUTING
+    $IPT -t nat -N $CHAIN_OUTPUT
+
+    if [ "$enable_firewall_set" = "1" ]; then
+        $IPT -t nat -A $CHAIN_PREROUTING -m set --match-set "$IPSET_NAME" dst,dst -j RETURN
+    fi
+
+    # 4. 填充 PREROUTING 链
+    for iface in $iface_list; do
+        for ip in $bypass_ips_list; do
+            $IPT -t nat -A $CHAIN_PREROUTING -i "$iface" -p tcp -d "$ip" -j RETURN
+        done
+        if [ -n "$bypass_ports_list" ]; then
+            local ipt_ports=$(echo "$bypass_ports_list" | sed 's/ /,/g')
+            $IPT -t nat -A $CHAIN_PREROUTING -i "$iface" -p tcp -m multiport --dports "$ipt_ports" -j RETURN
+        fi
+        # 将剩余的 TCP 流量重定向到代理端口
+        $IPT -t nat -A $CHAIN_PREROUTING -i "$iface" -p tcp -j REDIRECT --to-port "$port"
+    done
+
+    # 5. OUTPUT 链处理本机流量
+    if [ "$proxy_host" = "1" ]; then
+        # 域名绕过规则
+        if [ "$enable_firewall_set" = "1" ]; then
+            $IPT -t nat -A $CHAIN_OUTPUT -m set --match-set "$IPSET_NAME" dst -j RETURN
+        fi
+        # 豁免 UAmask 自己的流量 (通过 GID)
+        $IPT -t nat -A $CHAIN_OUTPUT -p tcp -m owner --gid-owner "$bypass_gid" -j RETURN
+        # 同时豁免 OpenClash 的流量 (GID 65534)，防止循环
+        $IPT -t nat -A $CHAIN_OUTPUT -p tcp -m owner --gid-owner "65534" -j RETURN
+        
+        # 豁免指定的目标 IP
+        for ip in $bypass_ips_list; do
+            $IPT -t nat -A $CHAIN_OUTPUT -p tcp -d "$ip" -j RETURN
+        done
+        
+        # 豁免指定的端口
+        if [ -n "$bypass_ports_list" ]; then
+            local ipt_ports=$(echo "$bypass_ports_list" | sed 's/ /,/g')
+            $IPT -t nat -A $CHAIN_OUTPUT -p tcp -m multiport --dports "$ipt_ports" -j RETURN
+        fi
+
+        # 将剩余的 TCP 流量重定向到代理端口
+        $IPT -t nat -A $CHAIN_OUTPUT -p tcp -j REDIRECT --to-port "$port"
+        
+        # 将自定义 OUTPUT 链挂载到内置的 OUTPUT 链
+        $IPT -t nat -I OUTPUT 1 -j $CHAIN_OUTPUT
+        logger -t "$NAME" "proxy_host is enabled. Added iptables rules for OUTPUT chain."
+    else
+        logger -t "$NAME" "proxy_host is disabled. Skipping OUTPUT chain rules."
+    fi
+
+    # 6. 将自定义 PREROUTING 链挂载到内置的 PREROUTING 链
+    $IPT -t nat -I PREROUTING 1 -j $CHAIN_PREROUTING
+    
+    logger -t "$NAME" "Firewall rules (iptables) applied."
+}
+
+
+# 通用封装函数
+
+set_firewall() {
+    if [ "$FW_TYPE" = "nft" ]; then
+        set_firewall_nft
+    else
+        set_firewall_ipt
+    fi
+}
+
+unset_firewall() {
+    if [ "$FW_TYPE" = "nft" ]; then
+        unset_firewall_nft
+    else
+        unset_firewall_ipt
+    fi
+}
+
+# 通用服务函数 (启动、停止、组设置)
+
+# 检查并创建专用组
+setup_group() {
+    config_load "$NAME"
+    local bypass_gid
+    config_get bypass_gid "main" "bypass_gid" "65533"
+
+    if ! grep -q ":$bypass_gid:" /etc/group; then
+        echo "UAmask:x:$bypass_gid:" >> /etc/group
+    fi
+}
+
+
+trim_config_value() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+json_add_csv_array() {
+    local name="$1"
+    local remaining="$2"
+    local item
+
+    json_add_array "$name"
+    while [ -n "$remaining" ]; do
+        case "$remaining" in
+            *,*)
+                item="${remaining%%,*}"
+                remaining="${remaining#*,}"
+                ;;
+            *)
+                item="$remaining"
+                remaining=""
+                ;;
+        esac
+        item="$(trim_config_value "$item")"
+        [ -n "$item" ] && json_add_string "" "$item"
+    done
+    json_close_array
+}
+
+generate_core_config() {
+    local tmp_config="$CORE_CONFIG_PATH.tmp.$$"
+    local validation_output
+    local port ua log_level log_file whitelist
+    local match_mode keywords ua_regex replace_method partial_replace
+    local enable_firewall_set firewall_ua_whitelist firewall_ua_bypass firewall_drop_on_match
+    local firewall_advanced_settings firewall_nonhttp_threshold firewall_timeout firewall_decision_delay
+    local operating_profile cache_size buffer_size pool_size gogc_value
+
+    if [ ! -r "$JSHN_LIB" ]; then
+        logger -t "$NAME" "Cannot generate core config: jshn.sh is unavailable."
+        return 1
+    fi
+    . "$JSHN_LIB"
+
+    config_get port "main" "port" "12032"
+    config_get ua "main" "ua" "FFF"
+    config_get log_level "main" "log_level" "info"
+    config_get log_file "main" "log_file" "/tmp/UAmask/UAmask.log"
+    config_get whitelist "main" "whitelist" ""
+
+    config_get match_mode "main" "match_mode" "keywords"
+    config_get keywords "main" "keywords" "iPhone,iPad,Android,Macintosh,Windows"
+    config_get ua_regex "main" "ua_regex" "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
+    config_get replace_method "main" "replace_method" "full"
+    partial_replace=0
+    [ "$replace_method" = "partial" ] && partial_replace=1
+
+    config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
+    config_get firewall_ua_whitelist "main" "Firewall_ua_whitelist" ""
+    config_get_bool firewall_ua_bypass "main" "Firewall_ua_bypass" "0"
+    config_get_bool firewall_drop_on_match "main" "Firewall_drop_on_match" "0"
+    config_get_bool firewall_advanced_settings "main" "firewall_advanced_settings" "0"
+    config_get firewall_nonhttp_threshold "main" "firewall_nonhttp_threshold" "5"
+    config_get firewall_timeout "main" "firewall_timeout" "28800"
+    config_get firewall_decision_delay "main" "firewall_decision_delay" "60"
+
+    if [ "$enable_firewall_set" != "1" ]; then
+        firewall_ua_whitelist=""
+        firewall_ua_bypass=0
+        firewall_drop_on_match=0
+    fi
+    if [ "$firewall_advanced_settings" != "1" ]; then
+        firewall_nonhttp_threshold=5
+        firewall_timeout=28800
+        firewall_decision_delay=60
+    else
+        # Preserve the safety floors used by the legacy flag-based launcher.
+        [ "$firewall_nonhttp_threshold" -ge 1 ] 2>/dev/null || firewall_nonhttp_threshold=5
+        [ "$firewall_timeout" -ge 60 ] 2>/dev/null || firewall_timeout=28800
+        [ "$firewall_decision_delay" -ge 10 ] 2>/dev/null || firewall_decision_delay=60
+    fi
+
+    config_get operating_profile "main" "operating_profile" "Medium"
+    config_get cache_size "main" "cache_size" "2000"
+    config_get buffer_size "main" "buffer_size" "8192"
+    config_get pool_size "main" "pool_size" "0"
+    config_get gogc_value "main" "gogc_value" "100"
+
+    umask 077
+    mkdir -p "$CORE_CONFIG_DIR" || return 1
+    mkdir -p "$(dirname "$log_file")" || return 1
+
+    json_init
+    json_add_int "schema_version" 1
+
+    json_add_object "listen"
+    json_add_int "port" "$port"
+    json_add_string "dial_timeout" "30s"
+    json_add_string "client_keep_alive" "3m"
+    json_add_string "upstream_keep_alive" "3m"
+    json_close_object
+
+    json_add_object "rewrite"
+    json_add_string "user_agent" "$ua"
+    json_add_string "mode" "$match_mode"
+    json_add_csv_array "keywords" "$keywords"
+    json_add_csv_array "whitelist" "$whitelist"
+    json_add_string "pattern" "$ua_regex"
+    json_add_boolean "partial_replace" "$partial_replace"
+    json_close_object
+
+    json_add_object "firewall"
+    json_add_string "backend" "$FW_TYPE"
+    json_add_string "set_name" "$IPSET_NAME"
+    json_add_csv_array "ua_whitelist" "$firewall_ua_whitelist"
+    json_add_boolean "drop_on_match" "$firewall_drop_on_match"
+    json_add_string "whitelist_timeout" "24h"
+    json_add_object "non_http"
+    json_add_boolean "enabled" "$firewall_ua_bypass"
+    json_add_int "threshold" "$firewall_nonhttp_threshold"
+    json_add_string "decision_delay" "${firewall_decision_delay}s"
+    json_add_string "http_cooldown" "1h"
+    json_add_string "timeout" "${firewall_timeout}s"
+    json_add_string "cleanup_interval" "10m"
+    json_close_object
+    json_close_object
+
+    json_add_object "observe"
+    json_add_string "log_level" "$log_level"
+    json_add_string "log_file" "$log_file"
+    json_add_string "stats_file" "/tmp/UAmask.stats"
+    json_add_string "stats_interval" "5s"
+    json_close_object
+
+    json_add_object "performance"
+    json_add_string "profile" "$operating_profile"
+    json_add_int "cache_size" "$cache_size"
+    json_add_int "buffer_size" "$buffer_size"
+    json_add_int "pool_size" "$pool_size"
+    json_add_int "gc_percent" "$gogc_value"
+    json_close_object
+
+    if ! json_dump > "$tmp_config"; then
+        logger -t "$NAME" "Failed to serialize core configuration."
+        rm -f "$tmp_config"
+        return 1
+    fi
+
+    validation_output="$("$PROG" -check-config -config "$tmp_config" 2>&1)"
+    if [ $? -ne 0 ]; then
+        logger -t "$NAME" "Core configuration validation failed: $validation_output"
+        rm -f "$tmp_config"
+        return 1
+    fi
+
+    if ! chmod 600 "$tmp_config"; then
+        logger -t "$NAME" "Failed to secure generated core configuration."
+        rm -f "$tmp_config"
+        return 1
+    fi
+    if ! mv -f "$tmp_config" "$CORE_CONFIG_PATH"; then
+        logger -t "$NAME" "Failed to install core configuration."
+        rm -f "$tmp_config"
+        return 1
+    fi
+    return 0
+}
+
+start_service() {
+    logger -t "$NAME" "Starting $NAME with firewall $FW_TYPE..."
+    config_load "$NAME"
+
+    local enabled proxy_host
+    config_get_bool enabled "enabled" "enabled" "0"
+    [ "$enabled" -eq 1 ] || return 1
+    config_get_bool proxy_host "main" "proxy_host" "0"
+
+    if [ "$proxy_host" = "1" ]; then
+        setup_group
+    fi
+    if ! generate_core_config; then
+        logger -t "$NAME" "Refusing to start with invalid core configuration."
+        return 1
+    fi
+
+    procd_open_instance "$NAME"
+    procd_set_param command "$PROG" -config "$CORE_CONFIG_PATH"
+    procd_set_param file "$CORE_CONFIG_PATH"
+    procd_set_param limits nofile="65536 65536"
+
+    if [ "$proxy_host" = "1" ]; then
+        procd_set_param group "UAmask"
+        logger -t "$NAME" "Running as group 'UAmask' for host proxying."
+    else
+        logger -t "$NAME" "Running as default user (proxy_host is disabled)."
+    fi
+
+    procd_set_param respawn
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+
+    set_firewall
+}
+
+stop_service() {
+    logger -t "$NAME" "Stopping $NAME..."
+    # 停止服务时自动清理防火墙
+    unset_firewall
+    # procd 会自动使用 pidfile 停止 start-stop-daemon
+}
+
+service_triggers() {
+    procd_add_reload_trigger "$NAME"
+}

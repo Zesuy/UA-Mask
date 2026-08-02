@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "listen": {
+    "port": 12032,
+    "port": 8080
+  }
+}

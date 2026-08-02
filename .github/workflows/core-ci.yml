@@ -1,0 +1,137 @@
+name: Core CI
+
+on:
+  pull_request:
+    paths:
+      - "core/**"
+      - "openwrt/root/etc/init.d/UAmask"
+      - "openwrt/root/etc/config/**"
+      - "openwrt/luci/**"
+      - "openwrt/package/Makefile"
+      - "openwrt/tests/**"
+      - "docs/config.example.json"
+      - "go.work"
+      - ".github/workflows/core-ci.yml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "core/**"
+      - "openwrt/root/etc/init.d/UAmask"
+      - "openwrt/root/etc/config/**"
+      - "openwrt/luci/**"
+      - "openwrt/package/Makefile"
+      - "openwrt/tests/**"
+      - "docs/config.example.json"
+      - "go.work"
+      - ".github/workflows/core-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: core-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: |
+            core/go.sum
+            go.work
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Format check
+        run: make fmt-check
+
+      - name: Vet
+        run: make vet
+
+      - name: Unit tests with coverage
+        run: |
+          set -o pipefail
+          go test -json -covermode=atomic -coverprofile=coverage.out ./... | tee test-results.json
+
+      - name: Race tests
+        run: go test -race -count=1 ./...
+
+      - name: Deterministic core stress tests
+        run: make stress
+
+      - name: Build
+        run: make build
+
+      - name: OpenWrt config transport check
+        run: make shell-check
+        env:
+          TEST_ARTIFACT_DIR: ${{ github.workspace }}/core/test-artifacts/openwrt
+
+      - name: BUILD-TRACE-001 Record test metadata
+        if: always()
+        run: |
+          python3 - "$GITHUB_SHA" "$(go version)" "$(go env GOOS)" "$(go env GOARCH)" <<'PY' > test-metadata.json
+          import json
+          import pathlib
+          import re
+          import sys
+
+          source = pathlib.Path("internal/config/config.go").read_text(encoding="utf-8")
+          match = re.search(r"(?m)^const SchemaVersion = ([0-9]+)$", source)
+          if match is None:
+              raise SystemExit("config schema version constant not found")
+          json.dump({
+              "commit": sys.argv[1],
+              "go_version": sys.argv[2],
+              "goos": sys.argv[3],
+              "goarch": sys.argv[4],
+              "config_schema_version": int(match.group(1)),
+          }, sys.stdout, indent=2)
+          sys.stdout.write("\n")
+          PY
+
+      - name: Coverage summary
+        run: |
+          echo "## Core coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out | tee coverage.txt
+          total_line=$(tail -n 1 coverage.txt)
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "$total_line" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-test-evidence
+          if-no-files-found: warn
+          path: |
+            core/test-results.json
+            core/coverage.out
+            core/coverage.txt
+            core/test-metadata.json
+            core/test-artifacts/**
+
+      - name: Build linux amd64 binary
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -o dist/UAmask-linux-amd64 ./cmd/UAmask
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-linux-amd64
+          path: core/dist/UAmask-linux-amd64
