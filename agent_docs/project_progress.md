@@ -1,42 +1,42 @@
-status: COMPLETE
-current_phase: phase_7_complete
+status: PHASE_8_DONE
+current_phase: phase_8_playwright_luci_e2e
 branch: feature/luci-js-ui
-next_executor: user_review
+next_executor: main_review
+paused_by_user: false
 
 # Project Progress
 
 ## Current result
 
-The Lua-to-native-LuCI-JavaScript product migration is complete. `LUI-000` through `LUI-070` are `DONE`; no workflow task remains READY, BLOCKED, or IN_PROGRESS. The branch preserves the existing UCI, schema-v1, CLI, and single-runtime-path contracts while replacing the legacy Lua controller/CBI interface with native Overview, Settings, and Diagnostics pages.
+The Lua-to-native-LuCI-JavaScript migration (`LUI-000` through `LUI-070`) remains complete at local commit `f2ba74a`. A new Phase 8 task, `PWE-010`, is adding unattended Playwright/QEMU product checks so normal UI iteration does not require manual package installation or hand-driven browser verification.
 
-## Delivered product behavior
+## PWE-010 progress
 
-- Native LuCI JavaScript with native theme behavior, light/dark compatibility, 375px layouts, keyboard operation, bounded loading/error states, and non-overlapping five-second status polling.
-- Product-oriented information architecture: Overview for health/metrics/risk, Settings for guided configuration and one explicit Save & Apply lifecycle action, Diagnostics for fixed status/log/effective-config/error actions.
-- Legacy CSV/space-separated scalar lists remain readable; successful saves normalize active valid values to canonical UCI lists without changing option names or schema-v1 semantics.
-- Invalid candidates preserve the healthy process and last-valid JSON. Recovery and failure facts are actionable and do not silently claim the service stopped.
-- Least-privilege UAmask-only UCI/adapter/init ACL; no arbitrary browser-selected path or command.
-- OpenWrt 23.05.5 IPK and 25.12.5 APK package generations with `luci-base` and `libubox`, without `luci-compat` or legacy Lua assets.
-- User documentation now matches the three-page interface and states cleartext HTTP scope plus bypass/offload/disconnect risks without unsupported performance or zero-leakage claims.
+- Pinned Playwright and axe dependencies, an official-image QEMU base preparer, disposable overlay runner, fast source mode, exact-package mode, guest fixtures, smoke/product/failure specs, Make targets, documentation, and a separate CI workflow are present in the uncommitted worktree.
+- A complete fast smoke run passed and cleaned up all owned processes.
+- Full source mode passed twice consecutively after semantic DynamicList assertions, bounded polling jitter, diagnostics action enablement, and accessible status locators were corrected.
+- Exact-package, clean alternate-cache bootstrap, intentional-failure evidence, CI security review, and all final compatibility commands passed.
+- No physical router, host firewall, remote branch, tag, release, or host runtime artifact was touched.
 
-## Verification result
+## Completed state
 
-- `make -C core ci` — PASS.
-- `cd core && go test -race -count=1 ./...` — PASS.
-- `sh openwrt/tests/luci-js-contract-test.sh` — PASS, including literal-null, DynamicList blank-editor, and unchanged legacy-list normalization regressions.
-- `sh openwrt/tests/package-assets-test.sh` — PASS.
-- Pinned OpenWrt 23.05.5 IPK and 25.12.5 APK package inspection — PASS.
-- Disposable OpenWrt 23.05.5 x86/64 QEMU product smoke — PASS for routes, lifecycle, legacy round-trip, failure/recovery, diagnostics, polling, responsive/theme/keyboard behavior, and same-overlay cold restart recovery.
-- `git diff --check` — PASS.
+`PWE-010` is `DONE` after main review. No worker or task-owned VM/browser process remains active. No physical router, host firewall, remote branch, tag, release, or GitHub state was touched.
 
-## Accepted limitation
+## Authoritative handoff
 
-The local QEMU/GRUB warm reset stopped before loading its second kernel. Cold-starting the exact same disposable overlay produced a new boot identity and restored package, canonical UCI, procd, schema-v1 JSON, firewall, polling, and all routes. Evidence is retained under ignored `dev/lui062/`; no physical router was operated.
+Read `agent_docs/pwe_playwright_handoff.md` for the exact worktree inventory, evidence directories, agent failures, current test defect, out-of-scope `.codex` changes, security considerations, and safe resume sequence.
 
-## Remote and release state
+## Final evidence
 
-No push, merge, pull request, tag, release, physical-device action, or host-firewall change was performed. The authorized single local commit contains the final reviewed migration files and is ready for user review.
+- Source full: `dev/luci-e2e/20260802T163402Z-68587-fast-full` — 25/25, cleanup passed.
+- Source full repeat: `dev/luci-e2e/20260802T163538Z-70741-fast-full` — 25/25, cleanup passed.
+- Intentional failure probe: `dev/luci-e2e/20260802T163708Z-73379-fast-failure-probe` — expected test failure, trace/screenshot retained, cleanup passed.
+- Fresh cache bootstrap/warm smoke: `/tmp/uamask-e2e-cache.R9zpik`, `dev/luci-e2e/20260802T163834Z-76441-fast-smoke` — 7/7, cleanup passed.
+- Exact package full: `dev/luci-e2e/20260802T164016Z-80808-package-full` — 25/25; IPK `UAmask 0.4.3-1` installed and all three view hashes matched.
+- Keyless base-cache fallback: `/tmp/uamask-e2e-cache-keyless.EX1T0A` rebuilt the base and generated a disposable key.
+- Final warm smoke after CI/cache changes: `dev/luci-e2e/20260802T164537Z-7945-fast-smoke` — 7/7, cleanup passed.
+- Final core/race/OpenWrt contract commands and `git diff --check` passed.
 
-## Next action
+## Resolved resume blocker — 2026-08-02
 
-User reviews the final local branch diff and decides whether to push/open a PR. Any further product behavior change should begin as a new bounded task rather than reopening the completed migration workflow.
+The DynamicList assertion is semantic and `make luci-e2e-lint` passes. Main authorization allowed the separate production repair in `diagnostics.js`, after which the full source and package gates passed. The original `disabled="false"` defect is closed under decision D-021.

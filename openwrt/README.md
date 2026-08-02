@@ -84,3 +84,44 @@ sh openwrt/tests/package-assets-test.sh
 ```
 
 包产物还应核对依赖、架构、权限和内容，确认三个 JavaScript 视图、菜单、ACL、适配器、binary、init 与 UCI 配置存在，且 Lua controller/CBI 与 `luci-compat` 不存在。
+
+## LuCI Playwright 产品检查
+
+`openwrt/tests/e2e/` 提供无人值守的 OpenWrt 23.05.5 x86/64 QEMU 与 Playwright 检查。它只使用经过 SHA256 校验的官方 ext4 combined 镜像，首次准备一个带 LuCI、DHCP 管理口和测试 SSH key 的指纹化 base；每次运行都创建独立 qcow2 overlay，并使用 `restrict=on` 的 QEMU user networking 和 loopback-only SSH/HTTP 转发。
+
+主机前置条件：Node.js 20 或更高版本、npm、QEMU x86_64、`qemu-img`、OpenSSH client、curl、gzip、netcat、`ss` 和 Chromium。默认使用 `/dev/kvm`（可用时），否则自动回退 TCG。首次安装 Node 依赖不会下载浏览器：
+
+```sh
+make luci-e2e-install
+make luci-e2e-lint
+make luci-e2e-prepare
+```
+
+本机可以复用系统 Chromium，例如：
+
+```sh
+CHROMIUM_PATH=/snap/bin/chromium make luci-e2e-smoke
+CHROMIUM_PATH=/snap/bin/chromium make luci-e2e
+```
+
+快速 source 模式直接从当前 worktree 构建 core 并复制 config/init/adapter/menu/ACL/views，不构建或安装 IPK。完整模式覆盖三页、状态与恢复、五秒轮询、旧 UCI 列表、保存生命周期、失败保留、诊断操作、键盘、主题、布局和聚焦的 axe 检查。
+
+axe 仅排除 LuCI 23.05 `form.Flag` 生成的、带 `data-widget-id="widget.cbid.UAmask.…"` 的内部 checkbox 节点：该版本为这些节点生成空的内部 `<label>`，字段标题由外层 CBI 结构显示。排除范围不覆盖文本、选择、列表、按钮、状态或告警，也不关闭任何 axe rule；Playwright 仍单独验证 Flag 的键盘 Space 操作、焦点和恢复。若 LuCI 后续提供可访问名称，应移除此精确排除。
+
+精确 package 模式必须显式指定一个 IPK：
+
+```sh
+CHROMIUM_PATH=/snap/bin/chromium \
+  make luci-e2e-package IPK=/absolute/path/to/UAmask_0.4.3-1_x86_64.ipk
+```
+
+运行前会验证包名、SHA256、必要资产、无 Lua 兼容文件，以及包内三个视图与当前期望源码一致；安装后再核对 guest 中的视图哈希。package 模式不会用 source copy 替代包安装。
+
+默认输出位于 `dev/luci-e2e/<run-id>/`。失败会保留 Playwright trace、截图、HTML report、精简 console/network telemetry、QEMU serial、fixture action、source/package/OpenWrt/browser identity 和清理结果；不录制视频，也不保存 cookie 或 storage state。查看 trace：
+
+```sh
+cd openwrt/tests/e2e
+npx playwright show-trace ../../../dev/luci-e2e/<run-id>/test-results/**/trace.zip
+```
+
+所有入口都验证只终止自己 overlay 对应的 QEMU PID，并检查运行目录对应的 Chromium 临时进程已退出。若需并行运行，必须为每个 worker 单独分配 VM 与转发端口；当前固定 `workers: 1`。

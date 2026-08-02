@@ -1,0 +1,15 @@
+{
+  "name": "uamask-luci-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "node --check playwright.config.mjs && node --check fixtures.mjs && node --check tests/smoke.spec.mjs && node --check tests/product.spec.mjs && node --check tests/failure-probe.spec.mjs",
+    "test": "playwright test tests/smoke.spec.mjs tests/product.spec.mjs",
+    "test:smoke": "playwright test tests/smoke.spec.mjs",
+    "test:failure-probe": "playwright test tests/failure-probe.spec.mjs"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.62.1"
+  }
+}

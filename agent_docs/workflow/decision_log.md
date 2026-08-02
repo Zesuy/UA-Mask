@@ -123,3 +123,15 @@ The disposable OpenWrt 23.05.5 x86/64 environment passed routes, legacy scalar c
 Status: accepted after final product review.
 
 The primary README, OpenWrt build guide, and tutorial now describe the native Overview/Settings/Diagnostics interface, IPK/APK generations, legacy UCI normalization, authoritative core validation, single Save & Apply lifecycle action, and constrained diagnostics. Obsolete Lua/single-page guidance and unevidenced throughput, CPU reduction, compatibility, and zero-leakage promises were removed. Documentation explicitly limits rewriting to detected cleartext HTTP User-Agent headers and treats port/address bypass, non-HTTP offload, target-keyword offload, and disconnect-on-match as observable leakage or disruption risks rather than hidden performance features.
+
+### D-021 — Diagnostics actions use native boolean-attribute semantics
+
+Status: accepted after Phase 8 product verification.
+
+Diagnostics action buttons pass `null` when enabled and an empty attribute value only when disabled. This avoids emitting HTML `disabled="false"`, which remains disabled because HTML boolean attributes are controlled by presence. Playwright verifies refresh, cancel, confirmed clear-log, and recovery feedback through enabled controls and accessible status messages.
+
+### D-022 — CI never restores the disposable guest private key
+
+Status: accepted after Phase 8 security review.
+
+The GitHub E2E cache stores only verified browser/OpenWrt inputs and the public-key-bearing base image. If the matching private key is absent, `prepare-base.sh` explicitly rebuilds the fingerprinted base with a newly generated disposable key. Failure artifacts do not include passwords, cookies, storage state, or the private key.

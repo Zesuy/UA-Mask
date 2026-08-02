@@ -3,3 +3,4 @@
 /.cache/
 /dev/
 /dist/
+/openwrt/tests/e2e/node_modules/

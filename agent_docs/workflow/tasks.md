@@ -22,6 +22,7 @@ Only the main controller updates this board. `READY` means every dependency is `
 | LUI-065 | 6 | DynamicList blank-editor Save & Apply compatibility | luna_worker | DONE | LUI-064 | [LUI-065](tasks/LUI-065.md) |
 | LUI-066 | 6 | Normalize unchanged legacy scalars on save | luna_worker | DONE | LUI-065 | [LUI-066](tasks/LUI-066.md) |
 | LUI-070 | 7 | Final integration and product review | main | DONE | LUI-061, LUI-062 | [LUI-070](tasks/LUI-070.md) |
+| PWE-010 | 8 | Unattended Playwright LuCI product checks | luna_worker | DONE | LUI-070 | [PWE-010](tasks/PWE-010.md) |
 
 ## Parallelism rules
 

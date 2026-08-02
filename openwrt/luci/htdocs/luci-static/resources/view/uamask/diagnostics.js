@@ -74,7 +74,9 @@ function button(label, click, disabled, kind) {
 	return E('button', {
 		'class': 'btn cbi-button ' + (kind || 'cbi-button-action'),
 		'type': 'button',
-		'disabled': disabled,
+		/* HTML boolean attributes are disabled by presence, so false must
+		 * become null rather than the literal attribute value "false". */
+		'disabled': disabled ? '' : null,
 		'click': click
 	}, label);
 }
