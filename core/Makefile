@@ -40,5 +40,9 @@ shell-check:
 	@grep -q 'procd_set_param command "$$PROG" -config "$$CORE_CONFIG_PATH"' ../openwrt/root/etc/init.d/UAmask
 	sh ../openwrt/tests/config-generation-test.sh
 	sh ../openwrt/tests/procd-contract-test.sh
+	sh ../openwrt/tests/reload-contract-test.sh
+	sh ../openwrt/tests/luci-adapter-test.sh
+	sh ../openwrt/tests/luci-js-contract-test.sh
+	sh ../openwrt/tests/package-assets-test.sh
 
 ci: fmt-check vet test build shell-check

@@ -38,7 +38,7 @@ define Package/UAmask
 	SUBMENU:=Web Servers/Proxies
 	TITLE:=A transparent proxy for changing User-Agent (nftables)
 	URL:=https://github.com/Zesuy/UA-Mask
-	DEPENDS:=$(UAMASK_ARCH_DEPENDS) +luci-compat +libubox
+	DEPENDS:=$(UAMASK_ARCH_DEPENDS) +libubox +luci-base
 	CONFLICTS:=ua3f-tproxy ua3f-tproxy-ipt UAmask-ipt
 endef
 
@@ -84,10 +84,16 @@ define Package/UAmask/install/assets
 	$(INSTALL_BIN) $(UAMASK_SOURCE_DIR)/openwrt/root/etc/init.d/UAmask $(1)/etc/init.d/UAmask
 	$(INSTALL_DIR) $(1)/etc/config/
 	$(INSTALL_CONF) $(UAMASK_SOURCE_DIR)/openwrt/root/etc/config/UAmask $(1)/etc/config/UAmask
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi/
-	$(INSTALL_DATA) $(UAMASK_SOURCE_DIR)/openwrt/luci/model/cbi/UAmask.lua $(1)/usr/lib/lua/luci/model/cbi/UAmask.lua
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller/
-	$(INSTALL_DATA) $(UAMASK_SOURCE_DIR)/openwrt/luci/controller/UAmask.lua $(1)/usr/lib/lua/luci/controller/UAmask.lua
+	$(INSTALL_DIR) $(1)/usr/libexec/
+	$(INSTALL_BIN) $(UAMASK_SOURCE_DIR)/openwrt/root/usr/libexec/uamask-luci $(1)/usr/libexec/uamask-luci
+	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d/
+	$(INSTALL_DATA) $(UAMASK_SOURCE_DIR)/openwrt/luci/root/usr/share/luci/menu.d/luci-app-uamask.json $(1)/usr/share/luci/menu.d/luci-app-uamask.json
+	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d/
+	$(INSTALL_DATA) $(UAMASK_SOURCE_DIR)/openwrt/luci/root/usr/share/rpcd/acl.d/luci-app-uamask.json $(1)/usr/share/rpcd/acl.d/luci-app-uamask.json
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/uamask/
+	$(INSTALL_DATA) $(UAMASK_SOURCE_DIR)/openwrt/luci/htdocs/luci-static/resources/view/uamask/overview.js $(1)/www/luci-static/resources/view/uamask/overview.js
+	$(INSTALL_DATA) $(UAMASK_SOURCE_DIR)/openwrt/luci/htdocs/luci-static/resources/view/uamask/settings.js $(1)/www/luci-static/resources/view/uamask/settings.js
+	$(INSTALL_DATA) $(UAMASK_SOURCE_DIR)/openwrt/luci/htdocs/luci-static/resources/view/uamask/diagnostics.js $(1)/www/luci-static/resources/view/uamask/diagnostics.js
 endef
 
 ifeq ($(strip $(UAMASK_PREBUILT)),)

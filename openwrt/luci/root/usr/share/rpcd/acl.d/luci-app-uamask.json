@@ -1,0 +1,18 @@
+{
+	"luci-app-uamask": {
+		"description": "Grant access to the UA-Mask configuration and fixed diagnostics adapter",
+		"read": {
+			"uci": [ "UAmask" ],
+			"file": {
+				"/usr/libexec/uamask-luci": [ "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "UAmask" ],
+			"file": {
+				"/usr/libexec/uamask-luci": [ "exec" ],
+				"/etc/init.d/UAmask": [ "exec" ]
+			}
+		}
+	}
+}

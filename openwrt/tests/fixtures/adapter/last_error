@@ -1,0 +1,2 @@
+stage=validation
+message=Core configuration validation failed: invalid rewrite mode
