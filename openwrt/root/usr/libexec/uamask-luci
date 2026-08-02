@@ -1,0 +1,489 @@
+#!/bin/sh
+
+# The LuCI adapter is deliberately a small, fixed action surface.  It is an
+# OpenWrt presentation boundary only: all paths and executables are resolved
+# here and no browser argument is ever used as a path or command.
+
+set -u
+
+ADAPTER_NAME="${ADAPTER_NAME:-UAmask}"
+UCI_BIN="${UCI_BIN:-uci}"
+UAMASK_PROG="${UAMASK_PROG:-${PROG:-/usr/bin/UAmask}}"
+UBUS_BIN="${UBUS_BIN:-ubus}"
+JSONFILTER_BIN="${JSONFILTER_BIN:-jsonfilter}"
+JSHN_LIB="${JSHN_LIB:-/usr/share/libubox/jshn.sh}"
+CORE_CONFIG_DIR="${CORE_CONFIG_DIR:-/var/run/UAmask}"
+CORE_CONFIG_PATH="${CORE_CONFIG_PATH:-$CORE_CONFIG_DIR/config.json}"
+LAST_ERROR_PATH="${LAST_ERROR_PATH:-$CORE_CONFIG_DIR/last_error}"
+STATS_PATH="${STATS_PATH:-/tmp/UAmask.stats}"
+DEFAULT_LOG_PATH="${DEFAULT_LOG_PATH:-/tmp/UAmask/UAmask.log}"
+ALLOWED_TMP_LOG_ROOT="${ALLOWED_TMP_LOG_ROOT:-/tmp/UAmask}"
+ALLOWED_VAR_LOG_ROOT="${ALLOWED_VAR_LOG_ROOT:-/var/log/UAmask}"
+VERSION_FILE_PATH="${VERSION_FILE_PATH:-/usr/share/uamask/VERSION}"
+OPKG_CONTROL_PATH="${OPKG_CONTROL_PATH:-/usr/lib/opkg/info/UAmask.control}"
+APK_DATABASE_PATH="${APK_DATABASE_PATH:-/lib/apk/db/installed}"
+
+# OpenWrt 23.05's jshn.sh evaluates JSON_PREFIX from several helpers while
+# nounset is active. Its json_init() reads and then unsets JSON_UNSET during
+# cleanup, before later json_add_* calls append to it. Seed the initial cleanup
+# state here; json_begin() restores it after each json_init().
+JSON_PREFIX="${JSON_PREFIX-}"
+JSON_UNSET="${JSON_UNSET-}"
+
+# This file is supplied by libubox on OpenWrt.  The test contract injects a
+# compatible fixture through JSHN_LIB so the adapter never needs a host-side
+# JSON dependency.
+if [ -r "$JSHN_LIB" ]; then
+	# shellcheck disable=SC1090
+	. "$JSHN_LIB"
+fi
+
+json_available() {
+	type json_init >/dev/null 2>&1 &&
+		type json_dump >/dev/null 2>&1 &&
+		type json_add_object >/dev/null 2>&1 &&
+		type json_close_object >/dev/null 2>&1 &&
+		type json_add_string >/dev/null 2>&1 &&
+		type json_add_int >/dev/null 2>&1 &&
+		type json_add_boolean >/dev/null 2>&1
+}
+
+emit_fallback_error() {
+	# This path is only used when the platform's libubox JSON helper is
+	# unavailable.  Keep the message fixed so even an untrusted action cannot
+	# become an unescaped JSON value.
+	printf '%s\n' '{"ok":false,"error":"JSON helper unavailable"}'
+}
+
+json_begin() {
+	json_init
+	# jshn 23.05 leaves this variable unset after json_cleanup(), but its first
+	# json_add_* immediately expands it. Keep nounset for the adapter itself and
+	# restore only the platform helper's accumulator.
+	JSON_UNSET="${JSON_UNSET-}"
+	json_add_boolean "ok" "$1"
+	json_add_string "action" "$2"
+}
+
+json_finish() {
+	json_dump
+}
+
+emit_error() {
+	local action="$1"
+	local message="$2"
+
+	if ! json_available; then
+		emit_fallback_error
+		return 1
+	fi
+	json_begin 0 "$action"
+	json_add_string "error" "$message"
+	json_finish
+	return 1
+}
+
+# Read an option from UCI using a fixed package/section/option expression.
+# The command is intentionally not assembled from adapter arguments.  A
+# missing UCI value is distinguishable from an explicitly empty value by the
+# command's exit status, which preserves the init script's blank-log behavior.
+uci_value() {
+	local expression="$1"
+	local value
+
+	if value="$($UCI_BIN -q get "$expression" 2>/dev/null)"; then
+		printf '%s' "$value"
+	else
+		return 1
+	fi
+}
+
+configured_log_path() {
+	local value
+
+	if value="$(uci_value "$ADAPTER_NAME.main.log_file")"; then
+		printf '%s' "$value"
+	else
+		printf '%s' "$DEFAULT_LOG_PATH"
+	fi
+}
+
+resolve_allowed_log_path() {
+	local configured_path="$1"
+	local resolved_path
+	local allowed_root
+	local resolved_root
+
+	[ -n "$configured_path" ] || return 1
+	for allowed_root in "$ALLOWED_TMP_LOG_ROOT" "$ALLOWED_VAR_LOG_ROOT"; do
+		case "$configured_path" in
+			"$allowed_root"/*) ;;
+			*) continue ;;
+		esac
+		resolved_path="$(readlink -f "$configured_path" 2>/dev/null || true)"
+		resolved_root="$(readlink -f "$allowed_root" 2>/dev/null || true)"
+		[ -n "$resolved_path" ] && [ -n "$resolved_root" ] || return 1
+		case "$resolved_path" in
+			"$resolved_root"/*) printf '%s' "$resolved_path"; return 0 ;;
+		esac
+		return 1
+	done
+	return 1
+}
+
+enabled_value() {
+	local value
+
+	if value="$(uci_value "$ADAPTER_NAME.enabled.enabled")"; then
+		[ "$value" = "1" ] && printf '1' || printf '0'
+	else
+		printf '0'
+	fi
+}
+
+backend_value() {
+	local fw4_command="${FW4_COMMAND:-fw4}"
+
+	if command -v "$fw4_command" >/dev/null 2>&1; then
+		printf 'nft'
+	else
+		printf 'ipt'
+	fi
+}
+
+# Return installed package metadata. No version is embedded in JavaScript or
+# in this adapter, and the unchanged core CLI is not probed with new flags.
+version_value() {
+	local version
+
+	if [ -r "$VERSION_FILE_PATH" ]; then
+		read -r version < "$VERSION_FILE_PATH" || version=""
+		[ -n "$version" ] && { printf '%s' "$version"; return 0; }
+	fi
+
+	if [ -r "$OPKG_CONTROL_PATH" ]; then
+		version="$(sed -n 's/^Version:[[:space:]]*//p' "$OPKG_CONTROL_PATH" | sed -n '1p')"
+		[ -n "$version" ] && { printf '%s' "$version"; return 0; }
+	fi
+
+	if [ -r "$APK_DATABASE_PATH" ]; then
+		version="$(awk '
+			$0 == "P:UAmask" { found=1; next }
+			found && /^V:/ { sub(/^V:/, ""); print; exit }
+			/^P:/ { found=0 }
+		' "$APK_DATABASE_PATH")"
+		[ -n "$version" ] && { printf '%s' "$version"; return 0; }
+	fi
+
+	printf 'unknown'
+}
+
+last_error_read() {
+	LAST_ERROR_PRESENT=0
+	LAST_ERROR_STAGE=""
+	LAST_ERROR_MESSAGE=""
+
+	if [ ! -r "$LAST_ERROR_PATH" ]; then
+		return 0
+	fi
+
+	LAST_ERROR_PRESENT=1
+	while IFS= read -r LAST_ERROR_LINE || [ -n "$LAST_ERROR_LINE" ]; do
+		case "$LAST_ERROR_LINE" in
+			stage=*) LAST_ERROR_STAGE="${LAST_ERROR_LINE#stage=}" ;;
+			message=*) LAST_ERROR_MESSAGE="${LAST_ERROR_LINE#message=}" ;;
+		esac
+	done < "$LAST_ERROR_PATH"
+}
+
+service_hint() {
+	local service_json
+	local running
+	local exit_code
+	local instance
+
+	# Query only the fixed UA-Mask service and parse the fixed named instance.
+	# A registered non-running respawn instance without an exit code is the
+	# observable procd starting transition; a non-zero exit is failed.
+	command -v "$UBUS_BIN" >/dev/null 2>&1 || { printf '%s' ""; return 0; }
+	command -v "$JSONFILTER_BIN" >/dev/null 2>&1 || { printf '%s' ""; return 0; }
+	service_json="$($UBUS_BIN call service list '{"name":"UAmask"}' 2>/dev/null || true)"
+	[ -n "$service_json" ] || { printf '%s' ""; return 0; }
+	running="$($JSONFILTER_BIN -s "$service_json" -e '@.UAmask.instances.UAmask.running' 2>/dev/null || true)"
+	[ "$running" = "true" ] && { printf 'running'; return 0; }
+	exit_code="$($JSONFILTER_BIN -s "$service_json" -e '@.UAmask.instances.UAmask.exit_code' 2>/dev/null || true)"
+	case "$exit_code" in
+		''|0) ;;
+		*) printf 'failed'; return 0 ;;
+	esac
+	instance="$($JSONFILTER_BIN -s "$service_json" -e '@.UAmask.instances.UAmask' 2>/dev/null || true)"
+	[ -n "$instance" ] && { printf 'starting'; return 0; }
+
+	printf '%s' ""
+}
+
+process_id() {
+	local pidof_command="${PIDOF_COMMAND:-pidof}"
+	local value
+
+	if value="$("$pidof_command" "$ADAPTER_NAME" 2>/dev/null)"; then
+		# pidof may return multiple IDs.  Only expose the first numeric ID.
+		printf '%s\n' "$value" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) { print $i; exit } }'
+	fi
+}
+
+stat_value() {
+	local key="$1"
+
+	[ -r "$STATS_PATH" ] || return 1
+	awk -F: -v wanted="$key" '$1 == wanted { sub(/^[^:]*:/, ""); print; exit }' "$STATS_PATH"
+}
+
+stat_integer() {
+	local key="$1"
+	local value
+
+	value="$(stat_value "$key" 2>/dev/null || true)"
+	case "$value" in
+		''|*[!0-9]*) printf '0' ;;
+		*) printf '%s' "$value" ;;
+	esac
+}
+
+stat_decimal() {
+	local key="$1"
+	local value
+
+	value="$(stat_value "$key" 2>/dev/null || true)"
+	case "$value" in
+		''|*[!0-9.\-]*) printf '0' ;;
+		*) printf '%s' "$value" ;;
+	esac
+}
+
+add_last_error_object() {
+	json_add_object "last_error"
+	json_add_boolean "present" "$LAST_ERROR_PRESENT"
+	json_add_string "stage" "$LAST_ERROR_STAGE"
+	json_add_string "message" "$LAST_ERROR_MESSAGE"
+	json_close_object
+}
+
+add_stats_object() {
+	local available=0
+
+	[ -r "$STATS_PATH" ] && available=1
+	json_add_object "stats"
+	json_add_boolean "available" "$available"
+	json_add_int "current_connections" "$(stat_integer current_connections)"
+	json_add_int "total_requests" "$(stat_integer total_requests)"
+	# jshn.sh has no portable floating-point primitive across supported
+	# releases.  Preserve the reporter's exact decimal text as strings; page
+	# code can parse these values without losing precision or unsafe shell
+	# interpolation.
+	json_add_string "rps" "$(stat_decimal rps)"
+	json_add_int "successful_modifications" "$(stat_integer successful_modifications)"
+	json_add_int "direct_passthrough" "$(stat_integer direct_passthrough)"
+	json_add_int "rule_processing" "$(stat_integer rule_processing)"
+	json_add_int "cache_hit_modify" "$(stat_integer cache_hit_modify)"
+	json_add_int "cache_hit_pass" "$(stat_integer cache_hit_pass)"
+	json_add_string "total_cache_ratio" "$(stat_decimal total_cache_ratio)"
+	json_close_object
+}
+
+action_status() {
+	local enabled
+	local pid
+	local hint
+	local state
+	local anomaly=""
+
+	last_error_read
+	enabled="$(enabled_value)"
+	pid="$(process_id || true)"
+	hint="$(service_hint)"
+
+	if [ "$enabled" != "1" ]; then
+		state="disabled"
+	elif [ -n "$pid" ] || [ "$hint" = "running" ]; then
+		state="running"
+		[ "$LAST_ERROR_PRESENT" -eq 1 ] && anomaly="configuration-error"
+	elif [ "$LAST_ERROR_PRESENT" -eq 1 ] || [ "$hint" = "failed" ]; then
+		state="failed"
+	elif [ "$hint" = "starting" ]; then
+		state="starting"
+	else
+		state="enabled-not-running"
+		anomaly="enabled-but-not-running"
+	fi
+
+	json_begin 1 "status"
+	json_add_string "state" "$state"
+	# Keep status as a readable alias for the page contract while state remains
+	# the canonical field used for branching.
+	json_add_string "status" "$state"
+	json_add_boolean "enabled" "$([ "$enabled" = "1" ] && printf 1 || printf 0)"
+	json_add_string "pid" "$pid"
+	json_add_string "anomaly" "$anomaly"
+	json_add_string "version" "$(version_value)"
+	json_add_string "backend" "$(backend_value)"
+	add_stats_object
+	add_last_error_object
+	json_finish
+}
+
+action_stats() {
+	json_begin 1 "stats"
+	add_stats_object
+	json_finish
+}
+
+action_version() {
+	json_begin 1 "version"
+	json_add_string "version" "$(version_value)"
+	json_finish
+}
+
+action_last_error() {
+	last_error_read
+	json_begin 1 "last-error"
+	add_last_error_object
+	json_finish
+}
+
+action_effective_config() {
+	local content
+
+	if [ ! -r "$CORE_CONFIG_PATH" ]; then
+		emit_error "effective-config" "effective configuration is unavailable"
+		return $?
+	fi
+	if [ ! -x "$UAMASK_PROG" ]; then
+		emit_error "effective-config" "UA-Mask runtime is unavailable"
+		return $?
+	fi
+	if ! content="$("$UAMASK_PROG" -dump-effective-config -config "$CORE_CONFIG_PATH" 2>/dev/null)"; then
+		emit_error "effective-config" "effective configuration cannot be resolved"
+		return $?
+	fi
+
+	json_begin 1 "effective-config"
+	# Return the core-authoritative effective schema-v1 JSON as escaped text.
+	json_add_string "content" "$content"
+	json_add_string "effective_config" "$content"
+	json_finish
+}
+
+action_logs() {
+	local configured_path
+	local log_path
+	local content
+	local line_count
+
+	configured_path="$(configured_log_path)"
+	if [ -z "$configured_path" ]; then
+		emit_error "logs" "log path is disabled"
+		return $?
+	fi
+	if ! log_path="$(resolve_allowed_log_path "$configured_path")"; then
+		emit_error "logs" "configured log path is outside allowed UA-Mask log directories"
+		return $?
+	fi
+	if [ ! -r "$log_path" ]; then
+		emit_error "logs" "configured log is unavailable"
+		return $?
+	fi
+	if ! content="$(tail -n 200 "$log_path" 2>/dev/null)"; then
+		emit_error "logs" "configured log cannot be read"
+		return $?
+	fi
+
+	line_count="$(printf '%s' "$content" | awk 'END { print NR + 0 }')"
+	json_begin 1 "logs"
+	json_add_boolean "available" 1
+	json_add_int "lines" "$line_count"
+	json_add_string "content" "$content"
+	json_finish
+}
+
+action_clear_log() {
+	local configured_path
+	local log_path
+
+	# Confirmation is explicit at both layers: the page asks the user, and the
+	# adapter requires the fixed literal token.  No path or command argument is
+	# accepted.
+	if [ "$#" -ne 1 ] || [ "$1" != "confirm" ]; then
+		emit_error "clear-log" "confirmation required"
+		return $?
+	fi
+
+	configured_path="$(configured_log_path)"
+	if [ -z "$configured_path" ]; then
+		emit_error "clear-log" "log path is disabled"
+		return $?
+	fi
+	if ! log_path="$(resolve_allowed_log_path "$configured_path")"; then
+		emit_error "clear-log" "configured log path is outside allowed UA-Mask log directories"
+		return $?
+	fi
+	if [ ! -e "$log_path" ] || [ ! -f "$log_path" ]; then
+		emit_error "clear-log" "configured log is unavailable"
+		return $?
+	fi
+	if ! : > "$log_path" 2>/dev/null; then
+		emit_error "clear-log" "configured log cannot be cleared"
+		return $?
+	fi
+
+	json_begin 1 "clear-log"
+	json_add_boolean "cleared" 1
+	json_finish
+}
+
+if ! json_available; then
+	emit_fallback_error
+	exit 1
+fi
+
+if [ "$#" -lt 1 ]; then
+	emit_error "" "an action is required"
+	exit 64
+fi
+
+action="$1"
+shift
+
+case "$action" in
+	status)
+		[ "$#" -eq 0 ] || { emit_error "status" "arguments are not accepted"; exit 64; }
+		action_status
+		;;
+	stats)
+		[ "$#" -eq 0 ] || { emit_error "stats" "arguments are not accepted"; exit 64; }
+		action_stats
+		;;
+	version)
+		[ "$#" -eq 0 ] || { emit_error "version" "arguments are not accepted"; exit 64; }
+		action_version
+		;;
+	last-error)
+		[ "$#" -eq 0 ] || { emit_error "$action" "arguments are not accepted"; exit 64; }
+		action_last_error
+		;;
+	effective-config)
+		[ "$#" -eq 0 ] || { emit_error "$action" "arguments are not accepted"; exit 64; }
+		action_effective_config
+		;;
+	logs)
+		[ "$#" -eq 0 ] || { emit_error "$action" "arguments are not accepted"; exit 64; }
+		action_logs
+		;;
+	clear-log)
+		action_clear_log "$@"
+		;;
+	*)
+		emit_error "$action" "unknown action"
+		exit 64
+		;;
+esac

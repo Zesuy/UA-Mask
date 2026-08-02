@@ -1,0 +1,7 @@
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+
+[agents.luna_worker]
+description = "Execute one bounded UA-Mask LuCI migration task card with an explicit file allowlist and required validation."
+config_file = "./agents/luna-worker.toml"

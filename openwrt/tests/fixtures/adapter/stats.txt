@@ -1,0 +1,9 @@
+current_connections:7
+total_requests:123
+rps:4.50
+successful_modifications:19
+direct_passthrough:104
+rule_processing:118
+cache_hit_modify:5
+cache_hit_pass:8
+total_cache_ratio:10.57

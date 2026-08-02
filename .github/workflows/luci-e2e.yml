@@ -1,0 +1,85 @@
+name: LuCI Playwright E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'openwrt/luci/**'
+      - 'openwrt/root/**'
+      - 'openwrt/package/**'
+      - 'openwrt/tests/e2e/**'
+      - 'openwrt/tests/luci-*.sh'
+      - 'Makefile'
+      - '.github/workflows/luci-e2e.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'openwrt/luci/**'
+      - 'openwrt/root/**'
+      - 'openwrt/package/**'
+      - 'openwrt/tests/e2e/**'
+      - 'Makefile'
+      - '.github/workflows/luci-e2e.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: luci-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-product-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      QEMU_ACCEL: tcg
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.3'
+          cache: npm
+          cache-dependency-path: openwrt/tests/e2e/package-lock.json
+
+      - name: Install QEMU and orchestration prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes qemu-system-x86 qemu-utils netcat-openbsd openssh-client curl gzip iproute2
+
+      - name: Restore verified browser and OpenWrt caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/ms-playwright
+            .cache/luci-e2e/downloads
+            .cache/luci-e2e/base
+          key: luci-e2e-v2-${{ runner.os }}-${{ hashFiles('openwrt/tests/e2e/package-lock.json', 'openwrt/tests/e2e/scripts/prepare-base.sh') }}
+
+      - name: Install pinned Playwright runtime and matched Chromium
+        working-directory: openwrt/tests/e2e
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Lint and dry checks
+        run: make luci-e2e-lint
+
+      - name: Prepare verified OpenWrt base
+        run: make luci-e2e-prepare
+
+      - name: Run unattended source product checks
+        run: make luci-e2e
+
+      - name: Upload failure evidence only
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-e2e-failure-${{ github.run_id }}
+          path: dev/luci-e2e/
+          if-no-files-found: error
+          retention-days: 3
+          include-hidden-files: true

@@ -1,452 +1,253 @@
 # UA-Mask 使用教程
 
-面向 OpenWrt 用户的一站式配置与排错指南，帮助你从 0 到 1 搭好 UA-Mask 并与 OpenClash 等共存。
+本文面向 OpenWrt 用户，说明安装、原生 LuCI JavaScript 界面、匹配语义、目标卸载风险和排错方法。
 
-## 目录
+## 先了解作用范围
 
-- [快速开始（5 分钟）](#快速开始-5-分钟)
-- [界面字段详解（与 LuCI 一一对应）](#界面字段详解与-luci-一一对应)
-- [与 OpenClash 共存](#与-openclash-共存)
-- [运行统计详解（页面“状态”卡片）](#运行统计详解页面状态卡片)
-- [流量卸载（基于 ipset/nfset）](#流量卸载基于-ipsetnfset)
-- [防检测策略与推荐组合](#防检测策略与推荐组合)
-- [匹配规则编写示例](#匹配规则编写示例)
-- [验证与排错（必看）](#验证与排错必看)
-  - [抓包定位 UA 泄露（tcpdump + Wireshark）](#抓包定位-ua-泄露tcpdump--wireshark)
-- [工作模式（性能预设）](#工作模式性能预设)
-- [安装与编译](#安装与编译)
-- [附录：UCI 配置参考（/etc/config/UAmask）](#附录uci-配置参考etcconfiguAmask)
-- [关于更名与项目理念（摘要）](#关于更名与项目理念摘要)
-- [项目发展历史](#项目演进心路历程)
-## 快速开始（5 分钟）
+UA-Mask 只处理检测到的明文 HTTP `User-Agent` 请求头：
 
-1) 安装（任选其一）
+- 它不能解密 HTTPS，也不会修改 TLS 内部的 HTTP 请求头。
+- 缺少 User-Agent 的请求直接放行。
+- 非 HTTP 流量不进入 UA 改写引擎。
+- 端口或地址绕过、非 HTTP 卸载、UA 关键词目标卸载都会让后续连接避开 UA-Mask，可能直接暴露原始 UA。
+- “断开当前连接”会故意中断命中的连接，让客户端重新连接到卸载路径，可能造成应用重试或会话中断。
 
-- 预编译包：到 Releases 下载与你设备架构匹配的 `.ipk`，然后在路由器上安装。
-  - iptables 用户若要启用“流量卸载”，请先安装 ipset。
+因此，验证应使用你能控制的明文 HTTP 服务或抓包，而不能仅凭 HTTPS 网站页面判断。
 
-  ```sh
-  opkg update
-  opkg install UAmask_*.ipk
-  # 仅 iptables 用户且需要 set 绕过时
-  opkg install ipset
-  ```
+## 快速开始
 
-2) 打开 Web 界面：系统 -> 服务 -> UA-Mask，勾选“启用”，先别急着保存。
+### 1. 安装匹配的包
 
-3) 常规设置（General）
+当前固定 SDK 矩阵覆盖 OpenWrt 23.05.5 IPK 和 OpenWrt 25.12.5 APK。包格式、系统代际和设备架构必须全部匹配。
 
-- 性能预设：默认 Medium（大多设备够用）。
-- User-Agent 标识（ua）：填一个“通用浏览器 UA”，例如：
-  Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Safari/537.36
-- 匹配规则：保留“基于关键词（推荐）”。关键词默认已覆盖常见系统（Windows/Android/iPhone…）。
+OpenWrt 23.05.5：
 
-4) 网络与防火墙（Network）
-
-- 监听端口：12032（默认）。
-- 监听接口：br-lan（默认）。
-- 代理主机流量：如果你的路由“本机”也需要被修改 UA，才开启。与 OpenClash 共存时建议遵循下文“完美分流方案”。
-- 绕过目标端口：默认 22 443。
-  - 若你“安全优先”，建议移除 443（原因见下文“安全优先方案”）。
-- 启用流量卸载（可选，高性能）：iptables 用户务必先装 ipset。
-
-5) 保存并应用。运行状态显示“运行中”。
-
-6) 验证
-
-- 从 LAN 内的一台设备访问[ua检验](http://ua.233996.xyz/)，应看到 UA 已变为你设定的值。
-
-提示：UA-Mask 仅在“明文 HTTP”中可见效果；HTTPS 流量不会修改 UA（TLS 加密后 UA 不可见）。
-
----
-
-## 界面字段详解（与 LuCI 一一对应）
-
-### 1. 常规设置（General）
-
-- 性能预设（operating_profile）
-  - Low：200 并发，2000 LRU，8K 缓冲，内存占用最低。
-  - Medium：500 并发，3000 LRU，8K 缓冲，均衡（默认）。
-  - High：1000 并发，5000 LRU，8K 缓冲，高吞吐。
-  - 自定义（custom）：自行设定缓冲/池/缓存/GOGC。
-- I/O 缓冲区大小（buffer_size）：每连接读写缓冲，越大吞吐越高但更占内存。默认 8192。
-- 工作协程池大小（pool_size）：限制最大并发、降低 GC；为 0 则每连接独立协程。
-- LRU 缓存大小（cache_size）：提升命中率；约每 1000 条 ~300KB RAM。
-- GOGC：Go GC 比例，使用协程池时建议保持 100。
-- User-Agent 标识（ua）：实际替换成的 UA 字符串。
-- 匹配规则（match_mode）
-  - 基于关键词：UA 包含任一关键词即整串替换（性能最佳）。
-  - 基于正则：配合“替换方式”使用（完整替换/部分替换）。
-  - 修改所有流量：强制全改（一般不必）。
-- 关键词列表（keywords）：逗号分隔，命中即整串替换。
-- 正则表达式（ua_regex）：例如 (iPhone|Android|Windows)。
-- 替换方式（replace_method）：正则命中后“完整替换”或“部分替换”。
-- User-Agent 白名单（whitelist）：这些 UA 命中后直接放行（逗号分隔）。
-
-### 2. 网络与防火墙（Network）
-
-- 监听端口（port）：默认 12032。
-- 监听接口（iface）：默认 br-lan，可多接口空格分隔。
-- 启用流量卸载（enable_firewall_set）：创建 ipset/nfset 以“跳过”特定 ip:port，提高性能（见下节“流量卸载”）。
-- UA 关键词白名单（Firewall_ua_whitelist）：命中这些 UA 关键词的连接，将目标 ip:port 动态加入 set 卸载（典型如 Steam）。
-- 绕过非http流量（Firewall_ua_bypass）：当识别为“非 HTTP”后，交由决策器评估并暂时卸载该 ip:port，降低负载。
-- 匹配时断开连接（Firewall_drop_on_match）：命中“UA 关键词白名单”时立即断开，强制新连接走卸载路径，加速生效。
-- 代理主机流量（proxy_host）：是否也代理路由器自身的流量；为避免与其他代理回环冲突，若不需要可关闭。
-- 绕过 GID（bypass_gid）：默认 65533，用于豁免自身流量；脚本同时豁免 OpenClash 的 65534，防循环。
-- 绕过目标端口（bypass_ports）：默认“22 443”。
-- 绕过目标 IP（bypass_ips）：默认局域网与保留网段。
-
-### 3. 高级设置（决策器）
-
-- 决策器设置（firewall_advanced_settings）：开启后可自定义卸载决策逻辑参数。
-- 非 HTTP 判定阈值（firewall_nonhttp_threshold）：将某 ip:port 判定为“非 HTTP”前需累计的非 HTTP 事件次数（默认 5）。
-- 决策延迟时间（秒）（firewall_decision_delay）：达到阈值后，延迟多久再做卸载决策，避免误判（默认 60s）。
-- 防火墙规则超时（秒）（firewall_timeout）：加入 set 的元素超时（默认 28800 秒=8 小时）。
-
-说明：
-- 决策过程中如出现 HTTP 活动，会触发“HTTP 豁免期”，对该 ip:port 的卸载判定被一票否决并延后，进一步降低误判与 UA 泄露风险。
-
-### 4. 应用日志（Softlog）
-
-- 日志等级（log_level）：debug/info/warn/error 等。
-- 应用日志路径（log_file）：建议放 /tmp，避免刷写闪存。
-- 查看/清空日志：页面内置“查看最近 200 行”与“一键清空”。
-
----
-
-## 与 OpenClash 共存
-
-UA-Mask 已对 Clash 做了共存优化：即使开启了“代理本机”，也会自动豁免 Clash 的流量（GID 65534），避免循环。
-
-### 完美分流方案（推荐）
-
-- 配置：UA-Mask（代理本机：关闭）+ OpenClash（代理本机：开启，绕过大陆：开启）
-- 效果：非 22/443 端口的 HTTP 流量先由 UA-Mask 修改 UA，再交给 OpenClash；OpenClash 将国内直连、国外走代理。
-- 备注：若关闭 OpenClash 的“绕过大陆”，则所有 HTTP/HTTPS 都会先过 UA-Mask 再过 OpenClash。
-
-```mermaid
-graph LR
-    A[LAN 流量] --> B{防火墙规则}
-    B -->|22 443 端口| C{OpenClash规则}
-    B -->|其他端口| D[UA-Mask]
-    
-    C -->|国内流量| E[OUTPUT 直连]
-    C -->|需要代理| F[Clash 核心]
-    
-    D --"本机代理开启"--> C{OpenClash规则}
-```
-
-### 最大兼容方案（不推荐）
-
-- 配置：UA-Mask（代理本机：关闭）+ OpenClash（代理本机：关闭，绕过大陆：开启）
-- 效果：OpenClash 仅代理 UA-Mask 绕过的端口（默认 22/443）。
-- 缺陷：其他端口（如 80）的流量在被 UA-Mask 修改后全部直连，不走 OpenClash。
-
-```mermaid
-graph LR
-    A[LAN 流量] --> B{防火墙规则}
-    B -->|端口 22, 443| C{openclash规则}
-    B -->|非 22, 443 端口| D[UA-Mask]
-    
-    C -->|国内流量| E[OUTPUT 直连]
-    C -->|需要代理| F[Clash 核心]
-    
-    D --> E[OUTPUT 直连]
-```
-
-验证共存：
-
-- iptables 机型：确保 UA-Mask 的 PREROUTING 规则在链首（服务重启会 -I 插入到最前）。
-  ```sh
-  iptables -t nat -nvL PREROUTING --line-numbers | sed -n '1,30p'
-  iptables -t nat -S UAmask_prerouting
-  ```
-- nftables 机型：
-  ```sh
-  fw4 print ruleset | grep -n UAmask -n
-  nft list set inet fw4 UAmask_bypass_set 2>/dev/null || true
-  ```
-
----
-
-## 运行统计详解（页面“状态”卡片）
-
-- 当前连接：实时并发连接数。
-- 请求总数：累计 HTTP 请求数。
-- 处理速率：RPS（(当前总数-上次总数)/刷新间隔）。
-- 成功修改：完成 UA 修改的请求数。
-- 直接放行：因白名单/不匹配而放行的请求数。
-- 规则处理：真正执行关键词/正则匹配（未命中缓存）的请求数。
-- 缓存(修改)：缓存命中且判定“修改”的次数。
-- 缓存(放行)：缓存命中且判定“放行”的次数。
-- 总缓存率：(缓存(修改)+缓存(放行)) / HTTP 请求数。
-
----
-
-## 流量卸载（基于 ipset/nfset）
-
-为降低 CPU 负载、提升高并发性能，引入“流量卸载（set 绕过）”。启用路径：服务 -> UA-Mask -> 网络与防火墙 -> 勾选“启用流量卸载”。
-
-iptables 用户：请先安装 ipset。
-
-包含两种卸载：
-
-1) 绕过非 http 流量（Firewall_ua_bypass）
-
-- 原理：识别到某 ip:port 多次出现“非 HTTP”连接后，进入“决策延迟”观察期；若期间无 HTTP 活动，一次性加入 UAmask_bypass_set，超时后自动移除（默认 8 小时，可在“防火墙规则超时（秒）”调整）。
-- 安全：若观察期内出现 HTTP 活动，会触发“HTTP 豁免期”，之前的非 HTTP 累积分数被一票否决，避免误判导致 UA 泄露。
-- 效果：该 ip:port 的后续新连接被防火墙直接放行，不再进入 UA-Mask 检测，显著减负。
-
-2) UA 关键词白名单（Firewall_ua_whitelist）
-
-- 原理：若某连接的 UA 命中你配置的“UA 关键词”，立即把该目标 ip:port 加入 set 卸载。
-- 适用：高带宽、长连接但 UA“无敏感标识”的流量（如 Steam 下载）。
-- 示例关键词：Valve/Steam, steam, steamworks, 360pcdn, ByteDancePcdn（按需取舍）。
-- 可选：匹配时断开连接（Firewall_drop_on_match）。命中后立刻断开现有连接，促使后续连接直接走卸载路径。可能会出现应用端“需重试”的提示，非苛求性能时可不启用。
-
-重要提醒（性能 vs 风险）
-
-- 被加入卸载 set 的 ip:port 在超时时间内会“完全绕过 UA-Mask”。这有可能导致“真实 UA 泄露”。请按你的环境权衡使用，尽量结合“非 HTTP 决策器”与谨慎的白名单关键词。
-
----
-
-## 防检测策略与推荐组合
-
-方案一：性能优先（大多数环境）
-
-- 匹配规则：正则 + 部分替换（兼容性好）。
-- 启用流量卸载；同时开启“绕过非 http 流量”和“UA 关键词白名单”（加入 Steam 等关键词）。
-
-方案二：安全优先（严格环境）
-
-- 关闭流量卸载与 UA 关键词白名单。
-- 检查“绕过目标端口”中移除 443，以防极少数明文 HTTP 走 443 导致 UA 泄露。
-
----
-
-## 匹配规则编写示例
-
-- 关键词模式（整串替换）
-  - 例：Windows,Linux,Android,iPhone,Macintosh,iPad,OpenHarmony
-- 正则模式
-  - 完整替换：ua_regex = (Windows NT|Android|iPhone|iPad|Macintosh)
-  - 部分替换：把 UA 中的“Android [0-9.]+”替换为“Android 10”
-    - ua_regex: Android [0-9.]+
-    - 替换方式：部分替换
-- 修改所有流量
-  - 在 HTTPS 上也不会生效（因为 UA 位于明文 HTTP 头部）。
-
----
-
-## 验证与排错（必看）
-
-基础检查
-
-- 进程：
-  ```sh
-  pidof UAmask || echo not running
-  ```
-- 日志：
-  ```sh
-  logread -e UAmask | tail -n 50
-  tail -n 200 /tmp/UAmask/UAmask.log 2>/dev/null
-  ```
-
-防火墙规则
-
-- iptables：
-  ```sh
-  iptables -t nat -S UAmask_prerouting
-  iptables -t nat -S UAmask_output
-  ipset list UAmask_bypass_set 2>/dev/null || true
-  ```
-- nftables：
-  ```sh
-  fw4 print ruleset | sed -n '/UAmask_/,+15p'
-  nft list set inet fw4 UAmask_bypass_set 2>/dev/null || true
-  ```
-
-常见问题
-
-- “HTTPS 看不到效果”：属正常，UA 仅在 HTTP 明文里；用 http://httpbin.org/user-agent 验证。
-- “访问变慢/CPU 高”：尽量使用“关键词模式”；或改为 Medium/Low 预设；减少正则复杂度。
-- “与 OpenClash 冲突/循环”：按本文“完美分流方案”设置；必要时重启 UA-Mask 使其规则位于更前面；保留绕过 GID 65534。
-- “Steam 下载 UA 泄露担忧”：别启用“UA 关键词白名单”或仅在下载时短时启用；或不用 set 卸载。
-- “运行统计不更新”：服务需运行一段时间才生成 /tmp/UAmask.stats；先确认进程与日志。
-- “启动失败”：确认 /usr/bin/UAmask 存在；若启用流量卸载，iptables 机型需安装 ipset。
-- “配置校验失败”：OpenWrt 会从 UCI 生成 `/var/run/UAmask/config.json`，可执行 `/usr/bin/UAmask -check-config -config /var/run/UAmask/config.json` 查看校验结果。
-- 查看 Go core 最终生效配置：`/usr/bin/UAmask -dump-effective-config -config /var/run/UAmask/config.json`。该 JSON 是运行时生成文件，请修改 UCI/LuCI，而不是直接编辑它。
-
----
-
-### 抓包定位 UA 泄露（tcpdump + Wireshark）
-
-目标：在 WAN 侧抓包并用 Wireshark 检查是否存在“未被 UA-Mask 修改的明文 HTTP 请求”。
-
-1) 确认 WAN 接口名（可能是 pppoe-wan/wan/eth0.2 等）
 ```sh
-WAN="$(uci -q get network.wan.device || uci -q get network.wan.ifname || ifstatus wan | jsonfilter -e '@.device')"
-echo "$WAN"
+opkg install /tmp/UAmask_*.ipk
 ```
 
-2) 抓取样本到路由器 /tmp/capture.pcap
-- 轻量（常见明文 HTTP 端口）
+OpenWrt 25.12.5：
+
 ```sh
-tcpdump -i "$WAN" -s 0 -U -w /tmp/capture.pcap 'tcp port 80 or tcp port 8080 or tcp port 8000'
+apk add --allow-untrusted /tmp/UAmask-*.apk
 ```
-- 全量（30 秒，流量大时慎用）
+
+iptables 后端如需目标卸载，还要安装 `ipset`。默认依赖包括 `luci-base` 和 `libubox`，无需 `luci-compat`。
+
+### 2. 完成基础设置
+
+打开“服务 → UA-Mask → 设置”：
+
+1. 勾选“Enable UA-Mask”。
+2. 在 Basics 中选择 Performance profile，并填写 Replacement User-Agent。
+3. 在 User-Agent matching 中选择 Match mode。初次使用建议保留 Keyword substring。
+4. 在 Traffic scope 中确认入口设备、监听端口和绕过范围。
+5. 保持 Smart offload 关闭，先完成基础验证。
+6. 点击“保存并应用”。页面会先保存 UCI，再由 core 校验候选配置，并执行一次生命周期 reload。
+
+保存成功后到“概览”确认状态为 Running。若失败，上一份有效运行配置会保留；打开“诊断”查看最近错误。
+
+### 3. 验证明文 HTTP
+
+在 LAN 客户端向受控 HTTP 服务发起请求，确认服务端收到的 User-Agent 等于 Replacement User-Agent。也可在 WAN 侧抓取你有权检查的流量：
+
 ```sh
-timeout 30s tcpdump -i "$WAN" -s 0 -U -w /tmp/capture.pcap tcp
-# 无 timeout 命令时，按 Ctrl+C 结束
+tcpdump -i <wan-device> -s 0 -A 'tcp port 80'
 ```
 
-3) 在 LAN 侧复现访问场景，然后停止抓包
+不要在命令中捕获无关用户流量；抓包文件可能包含敏感明文内容，用完后应妥善清理。
 
-4) 将抓包文件拉到本机
-- Windows PowerShell（启用 OpenSSH 的情况下）
-```powershell
-scp root@192.168.1.1:/tmp/capture.pcap .
-```
-- 或使用 WinSCP/pscp.exe 图形或命令行工具
+## 三个 LuCI 页面
 
-5) Wireshark 分析 UA
-- 打开 capture.pcap，输入显示过滤器：
-```
-http.request and http.user_agent
-```
-- 将 http.user_agent 设置为列：在任意包的“http.user_agent”字段上右键 -> Apply as Column
-- 若 HTTP 使用的不是 80 端口：
-  - 方式 A：右键该端口的一个 TCP 包 -> Decode As... -> 选择 HTTP
-  - 方式 B：Preferences -> Protocols -> HTTP -> TCP Ports，追加 8080,8000,8880,3128 等
-- 判断是否存在“未被替换”的 UA（与 UA-Mask 配置值不一致的、或带有设备真实标识的 UA）
+### 概览
 
-6) 若确认存在 UA 泄露，定位与修复
-- 检查是否被加入卸载 set（会直接跳过 UA-Mask）：
+概览页每 5 秒发起一次非重叠状态刷新，并显示：
+
+- Disabled、Starting、Running、Failed、Enabled but not running 等服务状态。
+- 已安装版本和当前 nftables/iptables 后端。
+- 当前连接、总请求、成功修改、直接放行、RPS、规则处理、修改/放行缓存命中和总缓存率。
+- 最近配置或服务错误，以及无统计文件时的明确提示。
+- 当前目标卸载、非 HTTP 绕过、UA 关键词卸载和断开连接风险提示。
+
+刷新失败时页面保留上一次可用状态并提供重试，不应把旧数据误认为新数据。
+
+### 设置
+
+设置页分为 Basics、User-Agent matching、Traffic scope、Smart offload 和 Expert performance 五组。列表字段使用 LuCI DynamicList，入口设备使用 DeviceSelect，不再要求手写整串分隔符。
+
+旧配置兼容规则：
+
+- `keywords`、`whitelist`、`Firewall_ua_whitelist` 可读取旧逗号分隔标量。
+- `iface`、`bypass_ports`、`bypass_ips` 可读取旧空格分隔标量。
+- 成功保存会把当前有效列表规范化为 UCI `list`，生成的 schema-v1 JSON 语义保持一致。
+- 空列表会保留为空，不会因删除字段而意外重新启用默认值。
+
+“保存”只暂存/保存配置；“保存并应用”才校验并执行一次服务生命周期操作。
+
+### 诊断
+
+诊断页提供：
+
+- 服务状态、PID、版本和防火墙后端。
+- 最近 200 行应用日志，以及需要二次确认的清空日志操作。
+- core 当前使用的 schema-v1 最终生效 JSON，只读展示。
+- 最近一次配置校验或服务启动错误。
+- 整页刷新、分区重试和清晰的缺失文件/异常状态提示。
+
+浏览器不能指定文件路径或命令；页面只调用固定适配器动作。请在设置页修改 UCI，不要直接编辑 `/var/run/UAmask/config.json`。
+
+## 设置字段与语义
+
+### Basics
+
+- `operating_profile`：Low、Medium、High 或 Custom。预设会决定 pool/cache 等运行参数；只有 Custom 才使用自定义性能字段。
+- `ua`：命中后使用的 Replacement User-Agent。默认值为 `FFF`，正式使用前通常应改成你需要的完整值。
+
+### User-Agent matching
+
+- `match_mode=keywords`：对 User-Agent 做区分大小写的子串匹配，命中后整串替换。
+- `match_mode=regex`：使用 Go RE2、大小写不敏感的正则；Full 替换整个 UA，Partial 只替换命中片段。
+- `match_mode=all`：替换所有检测到的非空明文 HTTP User-Agent，不代表能修改 HTTPS 或其他协议。
+- `keywords`：每项一个关键词子串，仅在 keywords 模式生效。
+- `ua_regex`：regex 模式使用的 Go RE2 表达式。
+- `replace_method`：regex 模式的 Full 或 Partial 替换范围。
+- `whitelist`：精确 User-Agent 放行。只有完整字符串区分大小写相等时才直接放行，结果仍可缓存。
+
+精确放行 `whitelist` 与 `Firewall_ua_whitelist` 必须区分：前者是“完整 UA 相等则本次请求不修改”，后者是“UA 包含关键词则把目标 IP:port 调度到卸载路径”。后者风险更高。
+
+### Traffic scope
+
+- `port`：透明重定向监听端口，范围 1–65535，默认 12032。
+- `iface`：需要重定向的一个或多个 LAN 入口设备，默认 `br-lan`。
+- `proxy_host`：是否也重定向路由器自身产生的合格 TCP 流量。与本机代理共存时需谨慎。
+- `bypass_gid`：`proxy_host` 开启时豁免的 Linux GID，默认 65533。
+- `bypass_ports`：重定向前直接豁免的目标 TCP 端口，默认配置含 22、443。
+- `bypass_ips`：重定向前直接豁免的目标 IPv4 地址或 CIDR。
+
+绕过端口/地址中的明文 HTTP 不会被 UA-Mask 修改。默认绕过 443 适合常规 HTTPS，但如果目标在 443 上提供明文 HTTP，它同样会被绕过。
+
+### Smart offload
+
+- `enable_firewall_set`：启用目标卸载总开关。匹配目标可能最长 24 小时不经过 UA-Mask，原始 UA 可能泄露。
+- `Firewall_ua_bypass`：达到阈值并经过观察延迟后，将持续判定为非 HTTP 的目标卸载。
+- `Firewall_ua_whitelist`：区分大小写的 UA 子串目标卸载列表。命中优先于精确放行和改写，不修改当前 UA，并把目标 IP:port 调度到卸载路径。
+- `Firewall_drop_on_match`：命中目标卸载关键词时主动断开当前连接；客户端重连后可能直接走卸载路径。
+
+启用卸载前先接受两个事实：目标绕过可能泄露原始 UA；断开匹配可能中断应用。若优先保证每个可检测明文 HTTP 请求都经过改写，应关闭目标卸载和 disconnect-on-match。
+
+### Expert performance
+
+- `firewall_advanced_settings`：允许调整非 HTTP 卸载判定参数。
+- `firewall_nonhttp_threshold`：判定前的连续非 HTTP 连接数，最小 1，默认 5。
+- `firewall_decision_delay`：达到阈值后的观察时间，单位秒，安全下限 10，默认 60。
+- `firewall_timeout`：非 HTTP 目标卸载时长，单位秒，安全下限 60，默认 28800（8 小时）。
+- `buffer_size`：Custom profile 的单连接缓冲区，1024–65536 字节。
+- `pool_size`：Custom profile 的 worker 数；0 表示每连接一个 goroutine。
+- `cache_size`：Custom profile 的决策缓存条目数。
+- `gogc_value`：Go GC 百分比；`-1` 会关闭自动 GC，只适合明确了解影响的用户。
+- `log_level`：debug、info、warn、error、fatal 或 panic。
+- `log_file`：应用日志路径；留空关闭 core 文件日志。诊断适配器只接受 UA-Mask 的受限日志位置。
+
+性能预设不是吞吐或 CPU 百分比保证。实际结果取决于路由器 CPU、内存、网络、规则和流量结构，应在自己的设备上基准测试。
+
+## 与其他本机代理共存
+
+UA-Mask 可以独立工作，也可以和 OpenClash 等代理同时安装，但防火墙顺序和本机流量范围取决于各自配置：
+
+- 通常先关闭 UA-Mask 的 `proxy_host`，验证 LAN 流量工作后，再决定是否代理路由器本机流量。
+- 需要 `proxy_host` 时，应确保 `bypass_gid` 和其他代理的运行身份不会形成重定向回环。
+- 更改任一服务的防火墙设置后，重新检查链顺序和实际出口；不要假定“安装即完美分流”。
+
+常用只读检查：
+
 ```sh
-# iptables 机型（ipset）
-ipset list UAmask_bypass_set 2>/dev/null | sed -n '1,100p'
-# nftables 机型
+# iptables
+iptables -t nat -S UAmask_prerouting
+iptables -t nat -S UAmask_output
+ipset list UAmask_bypass_set 2>/dev/null
+
+# nftables/firewall4
+fw4 print ruleset | sed -n '/UAmask_/,+20p'
 nft list set inet fw4 UAmask_bypass_set 2>/dev/null
 ```
-- 临时移除可疑 ip:port：
-```sh
-# iptables 机型（hash:ip,port）
-ipset del UAmask_bypass_set <ip>,<port>
-# nftables 机型（ip . port 二元组）
-nft delete element inet fw4 UAmask_bypass_set { <ip> . <port> }
-```
-- 调整配置后复测：
-  - 关闭“绕过非 http 流量”
-  - 清空或精简“UA 关键词白名单”（避免把高带宽下载目标加到卸载）
-  - 安全优先时，在“绕过目标端口”移除 443
-  - 确认 UA-Mask 规则优先级在前（见“与 OpenClash 共存/验证共存”命令）
-  - 尽量使用“关键词模式”或“正则+部分替换”提升命中率与兼容性
 
-## 工作模式（性能预设）
+## 验证与排错
 
-- Low：2000 LRU、8K 缓冲，协程池 200 —— 内存低。
-- Medium：3000 LRU、8K 缓冲，协程池 500 —— 平衡（默认）。
-- High：5000 LRU、8K 缓冲，协程池 1000 —— 高吞吐。
-- 自定义：按需设定 cache_size、buffer_size、pool_size、GOGC。
-
----
-
-## 安装与编译
-
-### 预编译包
-
-1. 前往 Releases。
-2. 下载匹配架构的 `.ipk`。
-3. 在路由器上安装（见“快速开始”）。
-
-### 源码编译
-
-1. 将本项目克隆到 OpenWrt 源码的 package/luci 目录。
-2. 先完整编译过一次固件更稳（make download；并发编译如 make -j8）。
-3. 编译本包：
+### 服务和配置
 
 ```sh
-make clean
-make package/UA-Mask/compile
+pidof UAmask || echo 'UAmask is not running'
+logread -e UAmask | tail -n 50
+ls -l /var/run/UAmask/config.json /var/run/UAmask/last_error 2>/dev/null
+/usr/bin/UAmask -check-config -config /var/run/UAmask/config.json
+/usr/bin/UAmask -dump-effective-config -config /var/run/UAmask/config.json
 ```
 
-生成位置：$(rootdir)/bin/packages/$(targetdir)/base/ 下的 UAmask_xxx.ipk
+若新配置无效，Save & Apply 会报错，健康 PID 和上一份有效 JSON 应保持不变。修正设置后再次 Save & Apply；恢复成功后最近错误会清除。
 
-固件内置：menuconfig 中 network/Web Servers/Proxies/UAmask 选中 *。
+### 常见现象
 
----
+- HTTPS 看不到修改：正常；TLS 内部 UA 不可见。
+- 概览暂时没有统计：core 每 5 秒写一次快照，启动后稍候；若持续缺失，到诊断页检查状态和错误。
+- Enabled but not running：配置声明启用但未发现进程；检查最近错误、core 校验和日志。
+- 防火墙后端缺少 set 支持：iptables 后端安装 `ipset`，再重新应用配置。
+- 应用被断开：检查 `Firewall_drop_on_match`；它的设计行为就是主动断开命中连接。
+- 发现原始 UA：检查目标端口/IP 绕过和 `UAmask_bypass_set`，并检查目标卸载、非 HTTP 绕过和关键词卸载是否启用。
+- DeviceSelect 没有预期接口：确认 `/etc/config/network` 和相关设备存在；也可输入 LuCI 允许创建的设备名。
 
-## 附录：UCI 配置参考（/etc/config/UAmask）
+### 抓包检查原始 UA
 
-示例（默认值可能随版本略有调整）：
+先确定 WAN 设备：
+
+```sh
+WAN_DEVICE="$(uci -q get network.wan.device || uci -q get network.wan.ifname || ifstatus wan | jsonfilter -e '@.device')"
+printf '%s\n' "$WAN_DEVICE"
+```
+
+只抓取短时间、已授权的明文 HTTP 样本：
+
+```sh
+timeout 30 tcpdump -i "$WAN_DEVICE" -s 0 -U -w /tmp/uamask-http.pcap \
+  'tcp port 80 or tcp port 8080 or tcp port 8000'
+```
+
+在 Wireshark 中使用 `http.request and http.user_agent` 过滤。若确认泄露，先停用目标卸载和 disconnect-on-match，再清理或等待 `UAmask_bypass_set` 超时并复测。直接删除防火墙 set 元素会改变路由器状态，执行前应确认精确目标和当前后端。
+
+## UCI 配置参考
+
+已有选项名保持兼容。规范列表示例：
 
 ```conf
 config 'UAmask' 'enabled'
-    option enabled '0'
+    option enabled '1'
 
 config 'UAmask' 'main'
     option port '12032'
-    option ua 'FFF'
-    option log_level 'info'
-    option iface 'br-lan'
+    option ua 'Mozilla/5.0 ...'
+    option operating_profile 'Medium'
+    option match_mode 'keywords'
+    list keywords 'Windows'
+    list keywords 'Android'
+    option replace_method 'full'
+    list iface 'br-lan'
     option proxy_host '0'
     option bypass_gid '65533'
-    option bypass_ports '22 443'
-    option bypass_ips '172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16'
-    option ua_regex '(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)'
-    option whitelist ''
+    list bypass_ports '22'
+    list bypass_ports '443'
+    list bypass_ips '192.168.0.0/16'
+    list bypass_ips '127.0.0.0/8'
+    option enable_firewall_set '0'
+    option Firewall_ua_bypass '0'
+    option Firewall_drop_on_match '0'
+    option firewall_advanced_settings '0'
+    option log_level 'info'
     option log_file '/tmp/UAmask/UAmask.log'
-
-    # 运行参数（预设/自定义）
-    # option operating_profile 'Medium|Low|High|custom'
-    # option cache_size '3000'
-    # option buffer_size '8192'
-    # option pool_size '500'
-    # option gogc_value '100'
-    # option match_mode 'keywords|regex|all'
-    # option keywords 'Windows,Linux,Android,iPhone,Macintosh,iPad,OpenHarmony'
-    # option replace_method 'full|partial'
-
-    # 流量卸载
-    # option enable_firewall_set '0|1'
-    # option Firewall_ua_whitelist ''
-    # option Firewall_ua_bypass '0|1'
-    # option Firewall_drop_on_match '0|1'
-
-    # 决策器（高级设置开启后生效）
-    # option firewall_advanced_settings '0|1'
-    # option firewall_nonhttp_threshold '5'
-    # option firewall_decision_delay '60'
-    # option firewall_timeout '28800'
 ```
 
----
+旧写法如 `option keywords 'Windows,Android'`、`option iface 'br-lan eth1'` 仍能读取，但建议通过 LuCI 保存一次，让有效列表自动规范化。不要改名 `Firewall_ua_whitelist` 等大小写敏感的既有键。
 
-## 关于更名与项目理念
+## 源码构建
 
+使用仓库根目录的 `scripts/build-release.sh` 和经过校验的 OpenWrt SDK。OpenWrt 23.05.5 传 `--package-format ipk`，OpenWrt 25.12.5 传 `--package-format apk`。具体参数、SDK 矩阵和产物说明见 [`openwrt/README.md`](../openwrt/README.md)。
 
-- 更名：UA3F-tproxy 演进为 UA-Mask，突出“精简、高性能、专注 UA 修改”。
-- 目标：硬路由可用、软路由高吞吐；热路径优化、零拷贝、缓存与池化，兼顾稳定与性能。
-
-我们会持续打磨性能与易用性，让每台路由器都能一键获得更安全、稳定的 UA Mask 能力。
-
-## 项目演进心路历程
-
-1.  **此前方案**：最开始的方案是 `防火墙 -> OpenClash -> SOCKS5 -> UA3F`。这个方案虽然可行，但流量链路过长，导致 CPU 负载轻易达到瓶颈,直到后来萌生了自行实现的想法。
-    ![最初的思考](./img/before-think.png)
-    ![高昂的 CPU 占用](./img/before-bad.png)
-
-2.  **第一次优化**：为了解决性能问题，我们想到绕开 OpenClash，直接通过防火墙将流量转发给 UA-Mask（彼时还叫ua3f-tproxy）。这大大提升了处理效率。
-    ![性能优化的灵感](./img/after-spark-1.png)
-
-3.  **与 OpenClash 共存**：但新问题随之而来——如何与 OpenClash 共存？我们设计了新的方案：在 PREROUTING 链将流量先交给 UA-Mask，处理后再由 OUTPUT 链的 OpenClash 进行分流，并利用“绕过大陆”功能避免不必要的流量进入 Clash 核心。
-    ![关于共存的思考](./img/after-think-clash.png)
-    ![完美的共存方案](./img/after-spark-clash.png)
-
-4.  **引入 ipset/nfset 卸载**：我们发现，超过 90% 的流量（如 Steam 下载）并不需要修改 UA。因此，引入 `ipset/nfset`，将这些高带宽流量动态加入卸载列表，使其直接通过内核转发，不再消耗 UA-Mask 的资源，实现了性能的飞跃。
-    ![发现高带宽流量的瓶颈](./img/ipset-think.png)
-    ![引入 set 绕过的灵感](./img/ipset-spark.png)
-    ![爱上纯内核转发的性能](./img/ipset-love.png)
-
-5.  **最终架构**：结合以上所有优化，形成了当前稳定、高效、兼容性强的最终架构。
-    ![最终的整体架构](./img/structure-all.png)
+脚本会生成安装包、SHA256 和 metadata，默认拒绝 dirty worktree。不要从不匹配系统版本或架构的 SDK 构建可交付包。

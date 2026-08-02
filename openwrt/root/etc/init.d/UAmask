@@ -9,6 +9,7 @@ PROG="${PROG:-/usr/bin/$NAME}"
 PID_FILE="/var/run/$NAME.pid"
 CORE_CONFIG_DIR="${CORE_CONFIG_DIR:-/var/run/$NAME}"
 CORE_CONFIG_PATH="$CORE_CONFIG_DIR/config.json"
+LAST_ERROR_PATH="${LAST_ERROR_PATH:-$CORE_CONFIG_DIR/last_error}"
 JSHN_LIB="${JSHN_LIB:-/usr/share/libubox/jshn.sh}"
 
 # --- NFT (fw4) 变量 ---
@@ -73,10 +74,13 @@ set_firewall_nft() {
     local enable_firewall_set
 
     config_get port "main" "port" "12032"
-    config_get iface_list "main" "iface" "br-lan"
+    read_uci_space_list "main" "iface" "br-lan"
+    iface_list="$UCI_LIST_RESULT"
     config_get bypass_gid "main" "bypass_gid" "65533"
-    config_get bypass_ports_list "main" "bypass_ports" ""
-    config_get bypass_ips_list "main" "bypass_ips" ""
+    read_uci_space_list "main" "bypass_ports" ""
+    bypass_ports_list="$UCI_LIST_RESULT"
+    read_uci_space_list "main" "bypass_ips" ""
+    bypass_ips_list="$UCI_LIST_RESULT"
     config_get_bool proxy_host "main" "proxy_host" ""
     config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
 
@@ -215,10 +219,13 @@ set_firewall_ipt() {
     local enable_firewall_set
 
     config_get port "main" "port" "12032"
-    config_get iface_list "main" "iface" "br-lan"
+    read_uci_space_list "main" "iface" "br-lan"
+    iface_list="$UCI_LIST_RESULT"
     config_get bypass_gid "main" "bypass_gid" "65533"
-    config_get bypass_ports_list "main" "bypass_ports" ""
-    config_get bypass_ips_list "main" "bypass_ips" ""
+    read_uci_space_list "main" "bypass_ports" ""
+    bypass_ports_list="$UCI_LIST_RESULT"
+    read_uci_space_list "main" "bypass_ips" ""
+    bypass_ips_list="$UCI_LIST_RESULT"
     config_get_bool proxy_host "main" "proxy_host" ""
 
     config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
@@ -332,6 +339,53 @@ trim_config_value() {
     printf '%s' "$value"
 }
 
+# The legacy configuration stores list-like values as one scalar.  UCI list
+# values expose an ``<option>_LENGTH`` marker and must be read through
+# config_list_foreach so an item containing a space or comma is not split a
+# second time.  Keep this check separate from config_get: config_get returns a
+# space-joined representation for a list, which is indistinguishable from a
+# legacy scalar.
+config_has_list_items() {
+    local section="$1"
+    local option="$2"
+    local length
+
+    config_get length "$section" "${option}_LENGTH" ""
+    case "$length" in
+        ''|*[!0-9]*|0) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+uci_list_append_space_item() {
+    local item
+
+    item="$(trim_config_value "$1")"
+    [ -n "$item" ] || return 0
+    if [ -n "$UCI_LIST_RESULT" ]; then
+        UCI_LIST_RESULT="$UCI_LIST_RESULT$UCI_LIST_SEPARATOR"
+    fi
+    UCI_LIST_RESULT="${UCI_LIST_RESULT}${item}"
+}
+
+# Read a whitespace-separated field from a canonical UCI list, or preserve
+# the legacy scalar value when no list marker exists.  The resulting value is
+# intentionally joined with one space because the firewall formatters below
+# already use shell word splitting for these fields.
+read_uci_space_list() {
+    local section="$1"
+    local option="$2"
+    local default_value="$3"
+
+    UCI_LIST_RESULT=""
+    UCI_LIST_SEPARATOR=" "
+    if config_has_list_items "$section" "$option"; then
+        config_list_foreach "$section" "$option" uci_list_append_space_item
+    else
+        config_get UCI_LIST_RESULT "$section" "$option" "$default_value"
+    fi
+}
+
 json_add_csv_array() {
     local name="$1"
     local remaining="$2"
@@ -355,17 +409,77 @@ json_add_csv_array() {
     json_close_array
 }
 
+json_add_uci_list_item() {
+    local item
+
+    item="$(trim_config_value "$1")"
+    [ -n "$item" ] || return 0
+    json_add_string "" "$item"
+}
+
+# Emit one JSON array from a canonical UCI list when present.  Legacy scalar
+# values continue through the existing CSV splitter, retaining trimming,
+# empty-item removal, Unicode, quote, and backslash behavior.
+json_add_uci_array() {
+    local name="$1"
+    local section="$2"
+    local option="$3"
+    local default_value="$4"
+
+    if config_has_list_items "$section" "$option"; then
+        json_add_array "$name"
+        config_list_foreach "$section" "$option" json_add_uci_list_item
+        json_close_array
+    else
+        config_get UCI_LIST_RESULT "$section" "$option" "$default_value"
+        json_add_csv_array "$name" "$UCI_LIST_RESULT"
+    fi
+}
+
+persist_last_error() {
+    local stage="$1"
+    local message="$2"
+    local tmp_error="$LAST_ERROR_PATH.tmp.$$"
+
+    message="$(printf '%s' "$message" | tr '\r\n' '  ')"
+    umask 077
+    mkdir -p "$CORE_CONFIG_DIR" || return 1
+    if ! printf 'stage=%s\nmessage=%s\n' "$stage" "$message" > "$tmp_error"; then
+        rm -f "$tmp_error"
+        return 1
+    fi
+    if ! chmod 600 "$tmp_error" || ! mv -f "$tmp_error" "$LAST_ERROR_PATH"; then
+        rm -f "$tmp_error"
+        return 1
+    fi
+}
+
+report_last_error() {
+    local stage="$1"
+    local message="$2"
+
+    logger -t "$NAME" "$message"
+    if ! persist_last_error "$stage" "$message"; then
+        logger -t "$NAME" "Failed to persist service error state."
+    fi
+    return 0
+}
+
+clear_last_error() {
+    rm -f "$LAST_ERROR_PATH" "$LAST_ERROR_PATH".tmp.*
+}
+
 generate_core_config() {
     local tmp_config="$CORE_CONFIG_PATH.tmp.$$"
     local validation_output
-    local port ua log_level log_file whitelist
-    local match_mode keywords ua_regex replace_method partial_replace
-    local enable_firewall_set firewall_ua_whitelist firewall_ua_bypass firewall_drop_on_match
+    local port ua log_level log_file
+    local match_mode ua_regex replace_method partial_replace
+    local enable_firewall_set firewall_ua_bypass firewall_drop_on_match
     local firewall_advanced_settings firewall_nonhttp_threshold firewall_timeout firewall_decision_delay
     local operating_profile cache_size buffer_size pool_size gogc_value
 
     if [ ! -r "$JSHN_LIB" ]; then
-        logger -t "$NAME" "Cannot generate core config: jshn.sh is unavailable."
+        report_last_error "config-generation" "Cannot generate core config: jshn.sh is unavailable."
         return 1
     fi
     . "$JSHN_LIB"
@@ -374,17 +488,13 @@ generate_core_config() {
     config_get ua "main" "ua" "FFF"
     config_get log_level "main" "log_level" "info"
     config_get log_file "main" "log_file" "/tmp/UAmask/UAmask.log"
-    config_get whitelist "main" "whitelist" ""
-
     config_get match_mode "main" "match_mode" "keywords"
-    config_get keywords "main" "keywords" "iPhone,iPad,Android,Macintosh,Windows"
     config_get ua_regex "main" "ua_regex" "(iPhone|iPad|Android|Macintosh|Windows|Linux)"
     config_get replace_method "main" "replace_method" "full"
     partial_replace=0
     [ "$replace_method" = "partial" ] && partial_replace=1
 
     config_get_bool enable_firewall_set "main" "enable_firewall_set" "0"
-    config_get firewall_ua_whitelist "main" "Firewall_ua_whitelist" ""
     config_get_bool firewall_ua_bypass "main" "Firewall_ua_bypass" "0"
     config_get_bool firewall_drop_on_match "main" "Firewall_drop_on_match" "0"
     config_get_bool firewall_advanced_settings "main" "firewall_advanced_settings" "0"
@@ -393,7 +503,6 @@ generate_core_config() {
     config_get firewall_decision_delay "main" "firewall_decision_delay" "60"
 
     if [ "$enable_firewall_set" != "1" ]; then
-        firewall_ua_whitelist=""
         firewall_ua_bypass=0
         firewall_drop_on_match=0
     fi
@@ -415,8 +524,14 @@ generate_core_config() {
     config_get gogc_value "main" "gogc_value" "100"
 
     umask 077
-    mkdir -p "$CORE_CONFIG_DIR" || return 1
-    mkdir -p "$(dirname "$log_file")" || return 1
+    if ! mkdir -p "$CORE_CONFIG_DIR"; then
+        logger -t "$NAME" "Cannot create core configuration directory."
+        return 1
+    fi
+    if ! mkdir -p "$(dirname "$log_file")"; then
+        report_last_error "config-generation" "Cannot create configured log directory."
+        return 1
+    fi
 
     json_init
     json_add_int "schema_version" 1
@@ -431,8 +546,8 @@ generate_core_config() {
     json_add_object "rewrite"
     json_add_string "user_agent" "$ua"
     json_add_string "mode" "$match_mode"
-    json_add_csv_array "keywords" "$keywords"
-    json_add_csv_array "whitelist" "$whitelist"
+    json_add_uci_array "keywords" "main" "keywords" "iPhone,iPad,Android,Macintosh,Windows"
+    json_add_uci_array "whitelist" "main" "whitelist" ""
     json_add_string "pattern" "$ua_regex"
     json_add_boolean "partial_replace" "$partial_replace"
     json_close_object
@@ -440,7 +555,11 @@ generate_core_config() {
     json_add_object "firewall"
     json_add_string "backend" "$FW_TYPE"
     json_add_string "set_name" "$IPSET_NAME"
-    json_add_csv_array "ua_whitelist" "$firewall_ua_whitelist"
+    if [ "$enable_firewall_set" = "1" ]; then
+        json_add_uci_array "ua_whitelist" "main" "Firewall_ua_whitelist" ""
+    else
+        json_add_csv_array "ua_whitelist" ""
+    fi
     json_add_boolean "drop_on_match" "$firewall_drop_on_match"
     json_add_string "whitelist_timeout" "24h"
     json_add_object "non_http"
@@ -469,75 +588,125 @@ generate_core_config() {
     json_close_object
 
     if ! json_dump > "$tmp_config"; then
-        logger -t "$NAME" "Failed to serialize core configuration."
+        report_last_error "config-generation" "Failed to serialize core configuration."
         rm -f "$tmp_config"
         return 1
     fi
 
     validation_output="$("$PROG" -check-config -config "$tmp_config" 2>&1)"
     if [ $? -ne 0 ]; then
-        logger -t "$NAME" "Core configuration validation failed: $validation_output"
+        report_last_error "validation" "Core configuration validation failed: $validation_output"
         rm -f "$tmp_config"
         return 1
     fi
 
     if ! chmod 600 "$tmp_config"; then
-        logger -t "$NAME" "Failed to secure generated core configuration."
+        report_last_error "config-generation" "Failed to secure generated core configuration."
         rm -f "$tmp_config"
         return 1
     fi
     if ! mv -f "$tmp_config" "$CORE_CONFIG_PATH"; then
-        logger -t "$NAME" "Failed to install core configuration."
+        report_last_error "config-generation" "Failed to install core configuration."
         rm -f "$tmp_config"
         return 1
     fi
     return 0
 }
 
-start_service() {
-    logger -t "$NAME" "Starting $NAME with firewall $FW_TYPE..."
-    config_load "$NAME"
-
-    local enabled proxy_host
-    config_get_bool enabled "enabled" "enabled" "0"
-    [ "$enabled" -eq 1 ] || return 1
+register_core_instance() {
+    local proxy_host
     config_get_bool proxy_host "main" "proxy_host" "0"
 
     if [ "$proxy_host" = "1" ]; then
-        setup_group
-    fi
-    if ! generate_core_config; then
-        logger -t "$NAME" "Refusing to start with invalid core configuration."
-        return 1
+        setup_group || return 1
     fi
 
-    procd_open_instance "$NAME"
-    procd_set_param command "$PROG" -config "$CORE_CONFIG_PATH"
-    procd_set_param file "$CORE_CONFIG_PATH"
-    procd_set_param limits nofile="65536 65536"
+    procd_open_instance "$NAME" || return 1
+    procd_set_param command "$PROG" -config "$CORE_CONFIG_PATH" || return 1
+    procd_set_param file "$CORE_CONFIG_PATH" || return 1
+    procd_set_param limits nofile="65536 65536" || return 1
 
     if [ "$proxy_host" = "1" ]; then
-        procd_set_param group "UAmask"
+        procd_set_param group "UAmask" || return 1
         logger -t "$NAME" "Running as group 'UAmask' for host proxying."
     else
         logger -t "$NAME" "Running as default user (proxy_host is disabled)."
     fi
 
-    procd_set_param respawn
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
+    procd_set_param respawn || return 1
+    procd_set_param stdout 1 || return 1
+    procd_set_param stderr 1 || return 1
+    procd_close_instance || return 1
+}
 
-    set_firewall
+apply_prepared_service() {
+    local stage="$1"
+
+    if ! register_core_instance; then
+        report_last_error "$stage" "Failed to register the UA-Mask procd instance."
+        return 1
+    fi
+    if ! set_firewall; then
+        report_last_error "$stage" "Failed to apply UA-Mask firewall rules."
+        return 1
+    fi
+    clear_last_error
+}
+
+start_service() {
+    local enabled
+
+    logger -t "$NAME" "Starting $NAME with firewall $FW_TYPE..."
+    config_load "$NAME"
+    config_get_bool enabled "enabled" "enabled" "0"
+    [ "$enabled" -eq 1 ] || return 1
+
+    if ! generate_core_config; then
+        logger -t "$NAME" "Refusing to start with invalid core configuration."
+        return 1
+    fi
+    apply_prepared_service "start"
+}
+
+reload_service() {
+    local enabled
+
+    logger -t "$NAME" "Reloading $NAME with firewall $FW_TYPE..."
+    config_load "$NAME"
+    config_get_bool enabled "enabled" "enabled" "0"
+
+    if [ "$enabled" -ne 1 ]; then
+        if ! stop_service || ! procd_kill "$NAME"; then
+            report_last_error "stop" "Failed to stop the disabled UA-Mask service."
+            return 1
+        fi
+        clear_last_error
+        return 0
+    fi
+
+    # Validation and atomic replacement happen before procd receives the new
+    # instance definition.  A failure therefore leaves the healthy process
+    # and its last valid config.json untouched.
+    if ! generate_core_config; then
+        logger -t "$NAME" "Refusing to reload with invalid core configuration."
+        return 1
+    fi
+    if ! rc_procd register_core_instance; then
+        report_last_error "reload" "Failed to update the UA-Mask procd instance."
+        return 1
+    fi
+    if ! set_firewall; then
+        report_last_error "reload" "Failed to apply UA-Mask firewall rules after reload."
+        return 1
+    fi
+    clear_last_error
 }
 
 stop_service() {
     logger -t "$NAME" "Stopping $NAME..."
-    # 停止服务时自动清理防火墙
-    unset_firewall
-    # procd 会自动使用 pidfile 停止 start-stop-daemon
-}
-
-service_triggers() {
-    procd_add_reload_trigger "$NAME"
+    if ! unset_firewall; then
+        report_last_error "stop" "Failed to remove UA-Mask firewall rules."
+        return 1
+    fi
+    clear_last_error
 }
