@@ -362,6 +362,7 @@ generate_core_config() {
     local match_mode keywords ua_regex replace_method partial_replace
     local enable_firewall_set firewall_ua_whitelist firewall_ua_bypass firewall_drop_on_match
     local firewall_advanced_settings firewall_nonhttp_threshold firewall_timeout firewall_decision_delay
+    local l3_rewrite_ttl l3_rewrite_ttl_value l3_rewrite_ipid l3_rewrite_tcpts l3_rewrite_tcpwin
     local operating_profile cache_size buffer_size pool_size gogc_value
 
     if [ ! -r "$JSHN_LIB" ]; then
@@ -414,6 +415,14 @@ generate_core_config() {
     config_get pool_size "main" "pool_size" "0"
     config_get gogc_value "main" "gogc_value" "100"
 
+    config_get_bool l3_rewrite_ttl "main" "l3_rewrite_ttl" "0"
+    config_get l3_rewrite_ttl_value "main" "l3_rewrite_ttl_value" "64"
+    config_get_bool l3_rewrite_ipid "main" "l3_rewrite_ipid" "0"
+    config_get_bool l3_rewrite_tcpts "main" "l3_rewrite_tcpts" "0"
+    config_get_bool l3_rewrite_tcpwin "main" "l3_rewrite_tcpwin" "0"
+    # Preserve the TTL value safety range enforced by the core validator.
+    [ "$l3_rewrite_ttl_value" -ge 1 ] 2>/dev/null && [ "$l3_rewrite_ttl_value" -le 255 ] 2>/dev/null || l3_rewrite_ttl_value=64
+
     umask 077
     mkdir -p "$CORE_CONFIG_DIR" || return 1
     mkdir -p "$(dirname "$log_file")" || return 1
@@ -451,6 +460,14 @@ generate_core_config() {
     json_add_string "timeout" "${firewall_timeout}s"
     json_add_string "cleanup_interval" "10m"
     json_close_object
+    json_close_object
+
+    json_add_object "l3_rewrite"
+    json_add_boolean "ttl" "$l3_rewrite_ttl"
+    json_add_int "ttl_value" "$l3_rewrite_ttl_value"
+    json_add_boolean "ipid" "$l3_rewrite_ipid"
+    json_add_boolean "tcpts" "$l3_rewrite_tcpts"
+    json_add_boolean "tcpwin" "$l3_rewrite_tcpwin"
     json_close_object
 
     json_add_object "observe"

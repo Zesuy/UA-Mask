@@ -40,7 +40,7 @@ UAmask = Map("UAmask",
         display: none !important;
     }
     </style>
-        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本：0.4.3</a>
+        <a href="https://github.com/Zesuy/UA-Mask" target="_blank">版本：0.4.4</a>
         <br>
         用于修改 User-Agent 的透明代理，使用 REDIRECT 技术实现。
         <br>
@@ -98,6 +98,7 @@ end
 
 main:tab("general", "常规设置")
 main:tab("network", "网络与防火墙")
+main:tab("l3rewrite", "L3 重写")
 main:tab("advanced", "高级设置")
 main:tab("softlog", "应用日志")
 
@@ -221,7 +222,30 @@ bypass_ips = main:taboption("network", Value, "bypass_ips", "绕过目标 IP")
 bypass_ips.default = "172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16"
 bypass_ips.description = "豁免的目标 IP/CIDR 列表，用空格分隔。"
 
--- === Tab 3: 高级设置（防火墙高级设置）===
+-- === Tab 3: L3 重写（IP/TCP 头部改写，独立于 UA 改写）===
+l3_rewrite_ttl = main:taboption("l3rewrite", Flag, "l3_rewrite_ttl", "L3 重写：TTL 改写")
+l3_rewrite_ttl.default = 0
+l3_rewrite_ttl.description = "启用后，通过防火墙规则将出站 IPv4 TTL 规范化为固定值，用于规避网关侧基于 TTL 的检测。"
+
+l3_rewrite_ttl_value = main:taboption("l3rewrite", Value, "l3_rewrite_ttl_value", "TTL 目标值")
+l3_rewrite_ttl_value:depends("l3_rewrite_ttl", "1")
+l3_rewrite_ttl_value.datatype = "range(1, 255)"
+l3_rewrite_ttl_value.default = "64"
+l3_rewrite_ttl_value.description = "TTL 重写的目标值，取值范围 1~255，默认 64。"
+
+l3_rewrite_ipid = main:taboption("l3rewrite", Flag, "l3_rewrite_ipid", "L3 重写：IPv4 ID 清零")
+l3_rewrite_ipid.default = 0
+l3_rewrite_ipid.description = "启用后，将出站 TCP 数据包的 IPv4 Identification 字段清零。需内核 NFQUEUE 支持（nft 后端需 kmod-nft-queue）。"
+
+l3_rewrite_tcpts = main:taboption("l3rewrite", Flag, "l3_rewrite_tcpts", "L3 重写：移除 TCP 时间戳")
+l3_rewrite_tcpts.default = 0
+l3_rewrite_tcpts.description = "启用后，从出站 TCP 握手包中移除 Timestamp 选项。需内核 NFQUEUE 支持。"
+
+l3_rewrite_tcpwin = main:taboption("l3rewrite", Flag, "l3_rewrite_tcpwin", "L3 重写：TCP 初始窗口")
+l3_rewrite_tcpwin.default = 0
+l3_rewrite_tcpwin.description = "启用后，将 TCP SYN 包的初始窗口值改写为 65535。需内核 NFQUEUE 支持。"
+
+-- === Tab 4: 高级设置（防火墙高级设置）===
 firewall_advanced_settings = main:taboption("advanced", Flag, "firewall_advanced_settings", "决策器设置")
 firewall_advanced_settings.description = "启用后，您可以自定义流量卸载中决策器的参数"
 
@@ -244,7 +268,7 @@ firewall_timeout.default = 28800
 firewall_timeout.description = "添加到 ipset/nfset 中的规则的超时时间。单位为秒（默认8*3600）。"
 
 
--- === Tab 4: 应用日志 ===
+-- === Tab 5: 应用日志 ===
 
 
 log_level = main:taboption("softlog", ListValue, "log_level", "日志等级")

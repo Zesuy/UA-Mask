@@ -1,1 +1,5 @@
 files/UAmask.init linguist-vendored
+*.golden.json text eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+openwrt/root/** text eol=lf

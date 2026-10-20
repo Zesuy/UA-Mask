@@ -139,6 +139,20 @@ type offloadComponent struct {
 
 func (component *offloadComponent) Stop() { component.log.Add("offload.stop") }
 
+type l3rewriteComponent struct {
+	log *lifecycleLog
+}
+
+func (component *l3rewriteComponent) Start() error {
+	component.log.Add("l3rewrite.start")
+	return nil
+}
+
+func (component *l3rewriteComponent) Close() error {
+	component.log.Add("l3rewrite.close")
+	return nil
+}
+
 type serverComponent struct {
 	log       *lifecycleLog
 	started   chan struct{}
@@ -175,8 +189,9 @@ func TestRuntimeRunContextUsesCausalShutdownOrder(t *testing.T) {
 
 	want := []string{
 		"executor.start", "store.start", "stats.start", "dispatcher.start",
-		"server.run", "server.done", "offload.stop", "executor.flush",
-		"executor.stop", "dispatcher.idle", "dispatcher.stop", "stats.stop", "store.stop",
+		"l3rewrite.start", "server.run", "server.done", "offload.stop",
+		"l3rewrite.close", "executor.flush", "executor.stop",
+		"dispatcher.idle", "dispatcher.stop", "stats.stop", "store.stop",
 	}
 	assertLifecycleCalls(t, log.Values(), want)
 }
@@ -194,7 +209,7 @@ func TestRuntimeRunContextReportsErrorsAndCompletesShutdown(t *testing.T) {
 		t.Fatalf("LIFE-ERROR-201 error = %v, want server and flush failures", err)
 	}
 	wantTail := []string{
-		"offload.stop", "executor.flush", "executor.stop",
+		"offload.stop", "l3rewrite.close", "executor.flush", "executor.stop",
 		"dispatcher.idle", "dispatcher.stop", "stats.stop", "store.stop",
 	}
 	calls := log.Values()
@@ -210,6 +225,7 @@ func runtimeWithFakes(log *lifecycleLog) *Runtime {
 		firewallExecutor: &executorComponent{lifecycleComponent: &lifecycleComponent{log: log, name: "executor"}},
 		dispatcher:       &dispatcherComponent{lifecycleComponent: &lifecycleComponent{log: log, name: "dispatcher"}},
 		offload:          &offloadComponent{log: log},
+		l3Rewrite:        &l3rewriteComponent{log: log},
 		shutdownTimeout:  time.Second,
 	}
 }

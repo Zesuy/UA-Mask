@@ -40,6 +40,11 @@ type legacyValues struct {
 	firewallTimeout          int
 	firewallDecisionDelay    time.Duration
 	firewallHTTPCooldown     time.Duration
+	l3TTL                    bool
+	l3TTLValue               uint
+	l3IPID                   bool
+	l3TCPTS                  bool
+	l3TCPWIN                 bool
 	statsFilePath            string
 	statsInterval            time.Duration
 }
@@ -81,6 +86,11 @@ func LoadFromArgs(args []string) (*Command, error) {
 		firewallTimeout:          defaults.Firewall.Timeout,
 		firewallDecisionDelay:    defaults.Firewall.DecisionDelay,
 		firewallHTTPCooldown:     defaults.Firewall.HTTPCooldownPeriod,
+		l3TTL:                    defaults.L3Rewrite.TTL,
+		l3TTLValue:               defaults.L3Rewrite.TTLValue,
+		l3IPID:                   defaults.L3Rewrite.IPID,
+		l3TCPTS:                  defaults.L3Rewrite.TCPTS,
+		l3TCPWIN:                 defaults.L3Rewrite.TCPWIN,
 		statsFilePath:            defaults.Observe.StatsFilePath,
 		statsInterval:            defaults.Observe.StatsInterval,
 	}
@@ -115,6 +125,11 @@ func LoadFromArgs(args []string) (*Command, error) {
 	fs.IntVar(&legacy.firewallTimeout, "fw-timeout", legacy.firewallTimeout, "Firewall timeout seconds (deprecated: use -config)")
 	fs.DurationVar(&legacy.firewallDecisionDelay, "fw-decision-delay", legacy.firewallDecisionDelay, "Firewall decision delay (deprecated: use -config)")
 	fs.DurationVar(&legacy.firewallHTTPCooldown, "fw-http-cooldown", legacy.firewallHTTPCooldown, "HTTP cooldown (deprecated: use -config)")
+	fs.BoolVar(&legacy.l3TTL, "l3-ttl", legacy.l3TTL, "Enable L3 TTL rewrite (deprecated: use -config)")
+	fs.UintVar(&legacy.l3TTLValue, "l3-ttl-value", legacy.l3TTLValue, "L3 TTL rewrite target value (deprecated: use -config)")
+	fs.BoolVar(&legacy.l3IPID, "l3-ipid", legacy.l3IPID, "Enable L3 IPv4 ID zeroing (deprecated: use -config)")
+	fs.BoolVar(&legacy.l3TCPTS, "l3-tcpts", legacy.l3TCPTS, "Enable L3 TCP timestamp removal (deprecated: use -config)")
+	fs.BoolVar(&legacy.l3TCPWIN, "l3-tcpwin", legacy.l3TCPWIN, "Enable L3 TCP initial window rewrite (deprecated: use -config)")
 	fs.StringVar(&legacy.statsFilePath, "stats-file", legacy.statsFilePath, "Stats file path (deprecated: use -config)")
 	fs.DurationVar(&legacy.statsInterval, "stats-interval", legacy.statsInterval, "Stats interval (deprecated: use -config)")
 
@@ -222,6 +237,21 @@ func applyLegacyOverrides(cfg *Config, values legacyValues, visited map[string]b
 	}
 	if visited["fw-http-cooldown"] {
 		cfg.Firewall.HTTPCooldownPeriod = values.firewallHTTPCooldown
+	}
+	if visited["l3-ttl"] {
+		cfg.L3Rewrite.TTL = values.l3TTL
+	}
+	if visited["l3-ttl-value"] {
+		cfg.L3Rewrite.TTLValue = values.l3TTLValue
+	}
+	if visited["l3-ipid"] {
+		cfg.L3Rewrite.IPID = values.l3IPID
+	}
+	if visited["l3-tcpts"] {
+		cfg.L3Rewrite.TCPTS = values.l3TCPTS
+	}
+	if visited["l3-tcpwin"] {
+		cfg.L3Rewrite.TCPWIN = values.l3TCPWIN
 	}
 	if visited["stats-file"] {
 		cfg.Observe.StatsFilePath = values.statsFilePath

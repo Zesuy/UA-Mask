@@ -15,6 +15,7 @@ type fileConfig struct {
 	Listen        fileListenConfig      `json:"listen"`
 	Rewrite       fileRewriteConfig     `json:"rewrite"`
 	Firewall      fileFirewallConfig    `json:"firewall"`
+	L3Rewrite     fileL3RewriteConfig   `json:"l3_rewrite"`
 	Observe       fileObserveConfig     `json:"observe"`
 	Performance   filePerformanceConfig `json:"performance"`
 }
@@ -51,6 +52,14 @@ type fileNonHTTPFirewallConfig struct {
 	HTTPCooldown    string `json:"http_cooldown"`
 	Timeout         string `json:"timeout"`
 	CleanupInterval string `json:"cleanup_interval"`
+}
+
+type fileL3RewriteConfig struct {
+	TTL      bool `json:"ttl"`
+	TTLValue uint `json:"ttl_value"`
+	IPID     bool `json:"ipid"`
+	TCPTS    bool `json:"tcpts"`
+	TCPWIN   bool `json:"tcpwin"`
 }
 
 type fileObserveConfig struct {
@@ -147,6 +156,13 @@ func effectiveFileConfig(cfg *Config) fileConfig {
 				CleanupInterval: cfg.Firewall.ProfileCleanupInterval.String(),
 			},
 		},
+		L3Rewrite: fileL3RewriteConfig{
+			TTL:      cfg.L3Rewrite.TTL,
+			TTLValue: cfg.L3Rewrite.TTLValue,
+			IPID:     cfg.L3Rewrite.IPID,
+			TCPTS:    cfg.L3Rewrite.TCPTS,
+			TCPWIN:   cfg.L3Rewrite.TCPWIN,
+		},
 		Observe: fileObserveConfig{
 			LogLevel:      cfg.Observe.LogLevel,
 			LogFile:       cfg.Observe.LogFile,
@@ -227,6 +243,13 @@ func (raw fileConfig) toConfig() (*Config, error) {
 			HTTPCooldownPeriod:     httpCooldown,
 			ProfileCleanupInterval: cleanupInterval,
 			ImmediateBypassTimeout: whitelistTimeout,
+		},
+		L3Rewrite: L3RewriteConfig{
+			TTL:      raw.L3Rewrite.TTL,
+			TTLValue: raw.L3Rewrite.TTLValue,
+			IPID:     raw.L3Rewrite.IPID,
+			TCPTS:    raw.L3Rewrite.TCPTS,
+			TCPWIN:   raw.L3Rewrite.TCPWIN,
 		},
 		Observe: ObserveConfig{
 			LogLevel:      strings.ToLower(raw.Observe.LogLevel),

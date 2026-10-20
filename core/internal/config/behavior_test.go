@@ -229,6 +229,66 @@ func TestEffectiveConfigGoldenFixtures(t *testing.T) {
 	}
 }
 
+func TestL3RewriteConfigValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		content   string
+		wantTTL   bool
+		wantValue uint
+		wantError string
+	}{
+		{
+			name:      "CFG-L3-001/defaults",
+			content:   `{"schema_version":1}`,
+			wantTTL:   false,
+			wantValue: 64,
+		},
+		{
+			name: "CFG-L3-002/full",
+			content: `{
+  "schema_version": 1,
+  "l3_rewrite": {"ttl": true, "ttl_value": 128, "ipid": true, "tcpts": true, "tcpwin": true}
+}`,
+			wantTTL:   true,
+			wantValue: 128,
+		},
+		{
+			name:      "CFG-L3-003/zero ttl value normalized",
+			content:   `{"schema_version":1,"l3_rewrite":{"ttl":true,"ttl_value":0}}`,
+			wantTTL:   true,
+			wantValue: 64,
+		},
+		{
+			name:      "CFG-L3-004/ttl value out of range",
+			content:   `{"schema_version":1,"l3_rewrite":{"ttl":true,"ttl_value":300}}`,
+			wantError: "invalid L3 rewrite TTL value",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConfigFile(t, test.content)
+			cfg, err := LoadFile(path)
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("LoadFile() error = %v, want substring %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFile(): %v", err)
+			}
+			if cfg.L3Rewrite.TTL != test.wantTTL || cfg.L3Rewrite.TTLValue != test.wantValue {
+				t.Fatalf("L3Rewrite = %+v, want ttl=%v ttl_value=%d", cfg.L3Rewrite, test.wantTTL, test.wantValue)
+			}
+		})
+	}
+}
+
 func assertEqual[T comparable](t *testing.T, got, want T) {
 	t.Helper()
 	if got != want {
