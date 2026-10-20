@@ -6,7 +6,7 @@
 <!-- PROJECT LOGO -->
 <br />
 <p align="center">
-<img src="./docs/img/screemshot_general.jpg" alt="UA-Mask LuCI 界面截图" width="700"></a>
+<img src="./docs/img/screemshot_general.png" alt="UA-Mask LuCI 界面截图" width="700"></a>
 
   <h3 align="center">UA-Mask</h3>
 
@@ -46,6 +46,37 @@
 - **白名单配合**：配合 `UA 关键词白名单` 使用效果更佳。例如，将 `Steam` 加入白名单，其 HTTP 下载流量在通过 UA 检测后即可被卸载，从而兼顾伪装效果与性能。
 
 
+## L3 重写（IP/TCP 头部改写）
+
+`L3 重写`独立于 HTTP User-Agent 重写，直接修改出站包的 IP/TCP 头部字段：
+
+- **TTL 改写**：通过防火墙规则将出站 IPv4 TTL 规范化为固定值（默认 `64`，范围 `1~255`）。
+- **IPv4 ID 清零**：将出站 TCP 包的 IPv4 Identification 字段置 `0`。
+- **TCP 时间戳移除**：删除出站 TCP 握手包中的 Timestamp 选项。
+- **TCP 初始窗口**：将 TCP SYN 包的初始窗口改写为 `65535`。
+
+其中 TTL 改写由防火墙规则完成；其余三项通过 `NFQUEUE` 将匹配的包交给用户态处理后再重新注入。
+
+<img src="./docs/img/screenshot_l3_rewrite.png" alt="L3 重写 LuCI 界面" width="700">
+
+> [!NOTE]
+> IPID 清零、TCP 时间戳移除、TCP 初始窗口依赖内核 NFQUEUE 能力。使用 nftables 后端时需 `kmod-nft-queue`；使用 iptables 后端时需 `kmod-nfnetlink-queue` 与 `iptables-mod-nfqueue`（TTL 改写还需 `iptables-mod-ipopt`）。缺失对应模块时相关功能将无法生效。
+
+配置示例（JSON）：
+
+```json
+{
+  "l3_rewrite": {
+    "ttl": true,
+    "ttl_value": 64,
+    "ipid": false,
+    "tcpts": false,
+    "tcpwin": false
+  }
+}
+```
+
+
 ## 架构
 `UA-Mask` 极大地优化了流量处理路径，无需依赖 OpenClash 即可独立工作，也能与之完美配合实现分流。
 - 对steam，P2P等重流量，我们可以直接用流量卸载绕过，不再经过UA-Mask，只需要处理一些小流量的api请求。
@@ -66,6 +97,7 @@
 *   **高性能 & 低GC**: 采用 Redirect 架构，开销极低；使用 bufio pool 和 worker pool，GC 极低。
 *   **高效 UA 缓存**: 90% 以上请求命中 LRU 缓存，极大减少重复匹配开销。
 *   **流量卸载**: 支持使用 `ipset`/`nfset` 动态绕过非 HTTP 流量及白名单目标，极大提升性能。
+*   **L3 重写**: 支持 TTL 改写、IPv4 Identification 清零、TCP 时间戳移除、TCP 初始窗口改写，独立于 HTTP UA 重写。
 *   **多种匹配模式**: 支持关键词、正则表达式，全部覆盖。
 *   **零泄露**: 正确处理 HTTP、非 HTTP 及混合流量中每个请求的 UA。
 

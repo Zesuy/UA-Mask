@@ -35,6 +35,13 @@
       "cleanup_interval": "10m0s"
     }
   },
+  "l3_rewrite": {
+    "ttl": false,
+    "ttl_value": 64,
+    "ipid": false,
+    "tcpts": false,
+    "tcpwin": false
+  },
   "observe": {
     "log_level": "info",
     "log_file": "",

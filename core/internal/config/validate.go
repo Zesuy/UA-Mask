@@ -14,6 +14,9 @@ func finalize(cfg *Config) error {
 	cfg.Rewrite.Whitelist = normalizeList(cfg.Rewrite.Whitelist)
 	cfg.Rewrite.Keywords = normalizeList(cfg.Rewrite.Keywords)
 	cfg.Firewall.UAWhitelist = normalizeList(cfg.Firewall.UAWhitelist)
+	if cfg.L3Rewrite.TTLValue == 0 {
+		cfg.L3Rewrite.TTLValue = defaultL3RewriteTTLValue
+	}
 	if err := validate(cfg); err != nil {
 		return err
 	}
@@ -67,6 +70,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Firewall.ProfileCleanupInterval <= 0 {
 		return fmt.Errorf("invalid profile cleanup interval: %s", cfg.Firewall.ProfileCleanupInterval)
+	}
+	if cfg.L3Rewrite.TTL && (cfg.L3Rewrite.TTLValue < 1 || cfg.L3Rewrite.TTLValue > 255) {
+		return fmt.Errorf("invalid L3 rewrite TTL value: %d", cfg.L3Rewrite.TTLValue)
 	}
 	if cfg.Observe.StatsInterval <= 0 {
 		return fmt.Errorf("invalid stats interval: %s", cfg.Observe.StatsInterval)

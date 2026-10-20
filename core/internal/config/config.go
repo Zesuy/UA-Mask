@@ -14,6 +14,7 @@ type Config struct {
 	Rewrite        RewriteConfig
 	RewriteRuntime RewriteRuntimeConfig
 	Firewall       FirewallConfig
+	L3Rewrite      L3RewriteConfig
 	Observe        ObserveConfig
 	Performance    PerformanceConfig
 }
@@ -56,6 +57,18 @@ type FirewallConfig struct {
 	ImmediateBypassTimeout int
 }
 
+// L3RewriteConfig controls Layer-3 (IP/TCP header) rewriting, performed
+// independently of the HTTP User-Agent rewrite. TTL is normalized through a
+// firewall rule, while IPID, TCP timestamp and TCP initial window rewrites are
+// applied in userspace by queuing matching packets through NFQUEUE.
+type L3RewriteConfig struct {
+	TTL      bool
+	TTLValue uint
+	IPID     bool
+	TCPTS    bool
+	TCPWIN   bool
+}
+
 type ObserveConfig struct {
 	LogLevel      string
 	LogFile       string
@@ -91,6 +104,11 @@ func (c *Config) LogConfig(version string) {
 	logrus.Infof("Firewall Rule Timeout (seconds): %d", c.Firewall.Timeout)
 	logrus.Infof("Firewall Decision Delay: %s", c.Firewall.DecisionDelay)
 	logrus.Infof("Firewall HTTP Cooldown Period: %s", c.Firewall.HTTPCooldownPeriod)
+
+	logrus.Infof("L3 Rewrite TTL: %v (value: %d)", c.L3Rewrite.TTL, c.L3Rewrite.TTLValue)
+	logrus.Infof("L3 Rewrite IPID: %v", c.L3Rewrite.IPID)
+	logrus.Infof("L3 Rewrite TCP Timestamp: %v", c.L3Rewrite.TCPTS)
+	logrus.Infof("L3 Rewrite TCP Initial Window: %v", c.L3Rewrite.TCPWIN)
 
 	if c.Rewrite.ForceReplace {
 		logrus.Info("Mode: Force Replace (All)")

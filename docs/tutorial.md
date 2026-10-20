@@ -85,6 +85,8 @@
 
 ### 2. 网络与防火墙（Network）
 
+![网络与防火墙界面](./img/screenshot_network.png)
+
 - 监听端口（port）：默认 12032。
 - 监听接口（iface）：默认 br-lan，可多接口空格分隔。
 - 启用流量卸载（enable_firewall_set）：创建 ipset/nfset 以“跳过”特定 ip:port，提高性能（见下节“流量卸载”）。
@@ -111,6 +113,19 @@
 - 日志等级（log_level）：debug/info/warn/error 等。
 - 应用日志路径（log_file）：建议放 /tmp，避免刷写闪存。
 - 查看/清空日志：页面内置“查看最近 200 行”与“一键清空”。
+
+### 5. L3 重写（独立标签页）
+
+![L3 重写界面](./img/screenshot_l3_rewrite.png)
+
+L3 重写拥有独立标签页（位于「网络与防火墙」之后），直接修改出站包的 IP/TCP 头部，与 HTTP UA 重写相互独立：
+
+- TTL 改写（l3_rewrite_ttl）：将出站 IPv4 TTL 规范化为固定值；配合 TTL 目标值（l3_rewrite_ttl_value，默认 64，范围 1~255）使用。
+- IPv4 ID 清零（l3_rewrite_ipid）：将出站 TCP 包 IPv4 Identification 字段置 0。
+- 移除 TCP 时间戳（l3_rewrite_tcpts）：删除出站 TCP 握手包中的 Timestamp 选项。
+- TCP 初始窗口（l3_rewrite_tcpwin）：将 TCP SYN 包初始窗口改写为 65535。
+
+> TTL 改写由防火墙规则完成，其余三项通过 NFQUEUE 由用户态处理。使用前请确认内核模块齐全：nftables 后端需 `kmod-nft-queue`；iptables 后端需 `kmod-nfnetlink-queue` 与 `iptables-mod-nfqueue`（TTL 改写还需 `iptables-mod-ipopt`）。
 
 ---
 
@@ -418,6 +433,13 @@ config 'UAmask' 'main'
     # option firewall_nonhttp_threshold '5'
     # option firewall_decision_delay '60'
     # option firewall_timeout '28800'
+
+    # L3 重写（IP/TCP 头部改写）
+    # option l3_rewrite_ttl '0|1'
+    # option l3_rewrite_ttl_value '64'
+    # option l3_rewrite_ipid '0|1'
+    # option l3_rewrite_tcpts '0|1'
+    # option l3_rewrite_tcpwin '0|1'
 ```
 
 ---

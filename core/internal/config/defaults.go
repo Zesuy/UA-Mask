@@ -12,6 +12,7 @@ const (
 	defaultProfileCleanup        = 10 * time.Minute
 	defaultImmediateBypassExpiry = 24 * 3600
 	defaultPattern               = "(iPhone|iPad|Android|Macintosh|Windows|Linux|Apple|Mac OS X|Mobile)"
+	defaultL3RewriteTTLValue     = 64
 )
 
 func DefaultConfig() *Config {
@@ -39,6 +40,9 @@ func DefaultConfig() *Config {
 			HTTPCooldownPeriod:     time.Hour,
 			ProfileCleanupInterval: defaultProfileCleanup,
 			ImmediateBypassTimeout: defaultImmediateBypassExpiry,
+		},
+		L3Rewrite: L3RewriteConfig{
+			TTLValue: defaultL3RewriteTTLValue,
 		},
 		Observe: ObserveConfig{
 			LogLevel:      "info",

@@ -14,6 +14,7 @@ import (
 	"UAmask/internal/events"
 	"UAmask/internal/firewall"
 	"UAmask/internal/ingress"
+	"UAmask/internal/l3rewrite"
 	"UAmask/internal/offload"
 	"UAmask/internal/policy"
 	"UAmask/internal/proxy"
@@ -60,6 +61,7 @@ type Runtime struct {
 	firewallExecutor executorRuntime
 	dispatcher       dispatcherRuntime
 	offload          offloadRuntime
+	l3Rewrite        l3rewrite.Server
 	server           serverRuntime
 	shutdownTimeout  time.Duration
 }
@@ -161,6 +163,8 @@ func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {
 	}
 	server := proxy.NewServer(cfg.Listen.PoolSize, redirectIngress, sessionManager)
 
+	l3Rewrite := l3rewrite.New(l3rewrite.FromConfig(cfg), logrus.StandardLogger())
+
 	return &Runtime{
 		config:           cfg,
 		version:          version,
@@ -170,6 +174,7 @@ func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {
 		firewallExecutor: firewallExecutor,
 		dispatcher:       dispatcher,
 		offload:          offloadCoordinator,
+		l3Rewrite:        l3Rewrite,
 		server:           server,
 		shutdownTimeout:  runtimeShutdownTimeout,
 	}, nil
@@ -193,6 +198,10 @@ func (r *Runtime) RunContext(ctx context.Context) error {
 	r.statsReporter.Start()
 	r.dispatcher.Start()
 
+	if err := r.l3Rewrite.Start(); err != nil {
+		return errors.Join(err, r.shutdown())
+	}
+
 	runErr := r.server.RunContext(ctx)
 	if ctx.Err() != nil && errors.Is(runErr, ctx.Err()) {
 		runErr = nil
@@ -202,7 +211,7 @@ func (r *Runtime) RunContext(ctx context.Context) error {
 
 func (r *Runtime) validate() error {
 	if r == nil || r.config == nil || r.statsReporter == nil || r.profileStore == nil ||
-		r.firewallExecutor == nil || r.dispatcher == nil || r.offload == nil || r.server == nil {
+		r.firewallExecutor == nil || r.dispatcher == nil || r.offload == nil || r.l3Rewrite == nil || r.server == nil {
 		return errors.New("runtime dependencies are not configured")
 	}
 	return nil
@@ -217,6 +226,7 @@ func (r *Runtime) shutdown() error {
 	defer cancel()
 
 	r.offload.Stop()
+	closeErr := r.l3Rewrite.Close()
 	flushErr := r.firewallExecutor.Flush(ctx)
 	r.firewallExecutor.Stop()
 	idleErr := r.dispatcher.WaitIdle(ctx)
@@ -225,6 +235,7 @@ func (r *Runtime) shutdown() error {
 	r.profileStore.Stop()
 
 	return errors.Join(
+		wrapShutdownError("close L3 rewrite", closeErr),
 		wrapShutdownError("flush firewall executor", flushErr),
 		wrapShutdownError("wait for event dispatcher", idleErr),
 	)

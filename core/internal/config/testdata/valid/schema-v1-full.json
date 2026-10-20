@@ -29,6 +29,13 @@
       "cleanup_interval": "2m"
     }
   },
+  "l3_rewrite": {
+    "ttl": true,
+    "ttl_value": 128,
+    "ipid": true,
+    "tcpts": true,
+    "tcpwin": true
+  },
   "observe": {
     "log_level": "WARN",
     "log_file": "/tmp/UAmask/trace.log",

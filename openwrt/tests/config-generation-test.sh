@@ -72,6 +72,7 @@ config_get() {
         complete:buffer_size) value="4096" ;;
         complete:pool_size) value="9" ;;
         complete:gogc_value) value="80" ;;
+        complete:l3_rewrite_ttl_value) value="128" ;;
         safety:firewall_nonhttp_threshold) value="0" ;;
         safety:firewall_timeout) value="1" ;;
         safety:firewall_decision_delay) value="0" ;;
@@ -102,7 +103,7 @@ config_get_bool() {
     local value="$default_value"
 
     case "$TEST_SCENARIO:$option" in
-        complete:enable_firewall_set|complete:Firewall_ua_bypass|complete:Firewall_drop_on_match|complete:firewall_advanced_settings)
+        complete:enable_firewall_set|complete:Firewall_ua_bypass|complete:Firewall_drop_on_match|complete:firewall_advanced_settings|complete:l3_rewrite_ttl|complete:l3_rewrite_ipid|complete:l3_rewrite_tcpts|complete:l3_rewrite_tcpwin)
             value="1"
             ;;
         safety:enable_firewall_set|safety:firewall_advanced_settings)
@@ -159,6 +160,13 @@ assert config == {
             "timeout": "3600s",
             "cleanup_interval": "10m",
         },
+    },
+    "l3_rewrite": {
+        "ttl": True,
+        "ttl_value": 128,
+        "ipid": True,
+        "tcpts": True,
+        "tcpwin": True,
     },
     "observe": {
         "log_level": "debug",
