@@ -269,11 +269,11 @@ class Runner:
         remote = '/tmp/exact.' + fmt
         verify = 'echo ' + shlex.quote(self.result['package_sha256'] + '  ' + remote) + ' | sha256sum -c -\n'
         if fmt == 'ipk':
-            install = 'opkg update\nopkg install ' + remote + '\nopkg install uhttpd luci-mod-admin-full\n'
+            install = 'opkg update\nopkg install ' + remote + '\nopkg install uhttpd luci-mod-admin-full curl\n'
             status = 'opkg list-installed\nopkg status UAmask\n'
             version = "opkg status UAmask | sed -n 's/^Version: //p'"
         else:
-            install = 'apk update\napk add --allow-untrusted ' + remote + '\napk add uhttpd luci-mod-admin-full\n'
+            install = 'apk update\napk add --allow-untrusted ' + remote + '\napk add uhttpd luci-mod-admin-full curl\n'
             status = 'apk info -v\ncat /lib/apk/db/installed\n'
             version = "awk 'BEGIN {RS=\"\"; FS=\"\\n\"} /(^|\\n)P:UAmask(\\n|$)/ {for(i=1;i<=NF;i++) if($i ~ /^V:/) print substr($i,3)}' /lib/apk/db/installed"
         self.ssh('set -eu\n' + verify + install, 'package-install.txt', timeout=600)
@@ -345,7 +345,16 @@ touch /etc/config/wireless
 /etc/init.d/uhttpd restart
 ''', 'luci-checks.txt')
         deadline = time.monotonic() + 30
-        while self.ssh("set -eu\nwget -T 5 -O /tmp/luci-response http://127.0.0.1/cgi-bin/luci/admin/services/UAmask\ngrep -q luci_username /tmp/luci-response\ncat /tmp/luci-response\n",
+        probe = '''set -eu
+code=$(curl --silent --show-error --max-time 5 --dump-header /tmp/luci-headers --output /tmp/luci-response --write-out '%{http_code}' http://127.0.0.1/cgi-bin/luci/admin/services/UAmask)
+sed '/^[Ss]et-[Cc]ookie:/d' /tmp/luci-headers
+cat /tmp/luci-response
+case "$code" in 200|403) ;; *) exit 1 ;; esac
+grep -q luci_username /tmp/luci-response
+'''
+        # LuCI returns 403 with the login form for unauthenticated protected routes.
+        # An arbitrary 403 page is rejected by the form marker and route check.
+        while self.ssh(probe,
                       'luci-checks.txt', check=False):
             self.wait(deadline)
 
