@@ -196,15 +196,23 @@ class Runner:
             while not serial.exists():
                 self.wait(deadline)
             console.connect(str(serial))
-            console.settimeout(1)
+            console.settimeout(0.2)
             console.sendall(b'\n')
             while True:
+                # Drain the serial transport as well as reading its logfile.
+                # Otherwise a full QEMU chardev buffer can stall guest boot.
+                try:
+                    if not console.recv(65536):
+                        raise RuntimeError('guest serial transport closed during boot')
+                except socket.timeout:
+                    pass
                 text = (self.root / 'qemu-serial.log').read_text(errors='replace')
                 if 'Please press Enter' in text and not sent:
                     console.sendall(b'\n')
+                    sent = True
                 if re.search(r'root@[^:]+:[^\n]*#', text):
                     break
-                self.wait(deadline)
+                self.wait(deadline, delay=0)
             bootstrap = ("umask 077; mkdir -p /etc/dropbear; printf '%s\\n' " +
                          shlex.quote(public) + ' > /etc/dropbear/authorized_keys; '
                          "uci set network.lan.proto='dhcp'; uci -q delete network.lan.ipaddr; "
@@ -220,12 +228,13 @@ class Runner:
         if self.args.fail_after == 'boot':
             raise RuntimeError('intentional --fail-after boot failure')
 
-    def wait(self, deadline):
+    def wait(self, deadline, delay=0.5):
         if self.process and self.process.poll() is not None:
             raise RuntimeError('owned QEMU exited; see qemu-stderr.log')
         if time.monotonic() >= deadline:
             raise TimeoutError('guest readiness deadline exceeded')
-        time.sleep(0.5)
+        if delay:
+            time.sleep(delay)
 
     def install(self):
         fmt = PLATFORMS[self.args.openwrt]['package_format']
