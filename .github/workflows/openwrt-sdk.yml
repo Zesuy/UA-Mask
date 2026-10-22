@@ -45,14 +45,14 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       version: ${{ steps.context.outputs.version }}
       commit: ${{ steps.context.outputs.commit }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Resolve build context
         id: context
@@ -97,7 +97,7 @@ jobs:
   build:
     name: Package ${{ matrix.id }}
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -105,19 +105,19 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Prepare evidence directory
         run: mkdir -p .cache/evidence
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: core/go.mod
+          go-version-file: .go-version
           cache-dependency-path: core/go.sum
 
       - name: Cache pinned SDK archive
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/openwrt-sdk
           key: openwrt-sdk-${{ matrix.id }}-${{ matrix.sdk_sha256 }}
@@ -236,7 +236,7 @@ jobs:
 
       - name: Cache pinned guest image
         if: matrix.smoke
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/openwrt-images
           key: openwrt-image-${{ matrix.openwrt }}-${{ hashFiles('openwrt/tests/runtime-smoke/platforms.json') }}
@@ -273,7 +273,7 @@ jobs:
 
       - name: Upload build and runtime evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: evidence-${{ matrix.id }}
           if-no-files-found: warn
@@ -286,7 +286,7 @@ jobs:
             .cache/evidence/**/*.jsonl
 
       - name: Upload target package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openwrt-${{ matrix.id }}
           if-no-files-found: error

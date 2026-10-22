@@ -25,13 +25,13 @@ concurrency:
 
 jobs:
   workflow-validation:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.24.x'
+          go-version-file: .go-version
           cache: false
       - name: Validate workflow tools and pinned platform matrix
         run: |
@@ -45,13 +45,13 @@ jobs:
           "$RUNNER_TEMP/workflow-tools/actionlint" -color -shellcheck=''
 
   build-context:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.context.outputs.version }}
       commit: ${{ steps.context.outputs.commit }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate build inputs
         id: context
@@ -63,18 +63,18 @@ jobs:
           echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
         working-directory: core
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: core/go.mod
+          go-version-file: .go-version
           cache-dependency-path: core/go.sum
       - name: Download dependencies
         run: go mod download
@@ -86,18 +86,18 @@ jobs:
         run: make build
 
   unit-coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
         working-directory: core
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: core/go.mod
+          go-version-file: .go-version
           cache-dependency-path: core/go.sum
       - name: Unit tests with coverage
         run: |
@@ -135,7 +135,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload test evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: core-test-evidence
           if-no-files-found: warn
@@ -146,18 +146,18 @@ jobs:
             core/test-metadata.json
 
   race-stress:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
         working-directory: core
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: core/go.mod
+          go-version-file: .go-version
           cache-dependency-path: core/go.sum
       - name: Full race suite
         run: |
@@ -169,25 +169,25 @@ jobs:
           make stress 2>&1 | tee stress.log
       - name: Upload race and stress evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: race-stress-evidence
           path: core/*.log
           retention-days: 7
 
   openwrt-contract:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
         working-directory: core
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: core/go.mod
+          go-version-file: .go-version
           cache-dependency-path: core/go.sum
       - name: OpenWrt config and procd contracts
         run: make shell-check
@@ -195,7 +195,7 @@ jobs:
           TEST_ARTIFACT_DIR: ${{ github.workspace }}/core/test-artifacts/openwrt
       - name: Upload OpenWrt failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openwrt-contract-failure
           if-no-files-found: warn
@@ -204,7 +204,7 @@ jobs:
   go-cross-build:
     if: toJSON(inputs.build-artifacts) != 'false'
     needs: build-context
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -221,11 +221,11 @@ jobs:
           - riscv64
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: core/go.mod
+          go-version-file: .go-version
           cache-dependency-path: core/go.sum
       - name: Cross-build static binary
         env:
@@ -239,7 +239,7 @@ jobs:
             --commit "$BUILD_COMMIT" \
             --output-dir 'dist/${{ matrix.arch }}'
       - name: Upload cross-build evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cross-${{ matrix.arch }}
           if-no-files-found: error
@@ -267,7 +267,7 @@ jobs:
       - openwrt-contract
       - go-cross-build
       - openwrt-sdk-smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Verify all required jobs passed
         run: |

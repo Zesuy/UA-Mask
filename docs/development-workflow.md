@@ -18,6 +18,8 @@
 
 ## 本地精确包验证
 
+CI 宿主固定 Ubuntu 24.04，官方 Actions 固定当前 Node 24 版本的完整 commit SHA，由 Dependabot 提交后续升级。Go 工具链集中固定在 `.go-version`（1.26.10，2026-10-22 官方仍受支持分支的最新补丁）；core/go.mod 的语言最低版本保持不变。更新该文件时需重新通过整个核心、打包和运行验证。
+
 宿主需要 Go、Python 3.10+、QEMU x86 系统模拟器、qemu-img 和 OpenSSH 客户端。Linux 下可用 KVM 时自动使用，否则 TCG；实际选择写入 result。无需宿主 root、TAP、bridge、namespace 或防火墙修改。
 
 先提交源码，再使用已准备的官方 SDK 构建（具体 SDK URL 与 SHA 固定在 `.github/openwrt-sdk-matrix.json`）：
