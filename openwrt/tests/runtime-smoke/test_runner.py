@@ -1,4 +1,5 @@
 import importlib.util
+import gzip
 import json
 from pathlib import Path
 import tempfile
@@ -55,6 +56,18 @@ class ContractTests(unittest.TestCase):
         for version, config in smoke.PLATFORMS.items():
             self.assertRegex(config['image_sha256'], r'^[a-f0-9]{64}$')
             self.assertIn('/releases/' + version + '/targets/x86/64/', config['image_url'])
+
+    def test_signed_image_trailer_and_truncation(self):
+        archive = self.root / 'signed.img.gz'
+        payload = gzip.compress(b'controlled raw image')
+        archive.write_bytes(payload + b'# fwtool metadata')
+        raw = self.root / 'base.raw'
+        smoke.extract_image(archive, raw)
+        self.assertEqual(raw.read_bytes(), b'controlled raw image')
+        raw.unlink()
+        archive.write_bytes(payload[:-4])
+        with self.assertRaisesRegex(ValueError, 'truncated'):
+            smoke.extract_image(archive, raw)
 
     def test_run_directory_never_overwritten(self):
         args = self.args()

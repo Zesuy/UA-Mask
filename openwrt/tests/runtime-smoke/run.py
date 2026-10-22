@@ -3,7 +3,6 @@
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import gzip
 import hashlib
 import json
 import os
@@ -17,6 +16,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import zlib
 
 
 PLATFORMS = json.loads(Path(__file__).with_name('platforms.json').read_text())
@@ -28,6 +28,19 @@ def digest(path):
         for block in iter(lambda: source.read(1024 * 1024), b''):
             h.update(block)
     return h.hexdigest()
+
+
+def extract_image(archive, destination):
+    # Signed OpenWrt images may append fwtool metadata after the gzip member.
+    # The caller verifies the hash of the entire archive before extraction.
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    with Path(archive).open('rb') as source, Path(destination).open('xb') as out:
+        for block in iter(lambda: source.read(64 * 1024), b''):
+            out.write(decoder.decompress(block))
+            if decoder.eof:
+                break
+        if not decoder.eof:
+            raise ValueError('truncated gzip image')
 
 
 def validate_metadata(package, metadata, version):
@@ -155,8 +168,7 @@ class Runner:
         if digest(archive) != p['image_sha256']:
             raise ValueError('image SHA256 mismatch')
         self.result['image_sha256'] = p['image_sha256']
-        with gzip.open(archive, 'rb') as source, self.raw.open('xb') as out:
-            shutil.copyfileobj(source, out)
+        extract_image(archive, self.raw)
         self.raw.chmod(0o444)
         self.command(['qemu-img', 'create', '-f', 'qcow2', '-F', 'raw', '-b',
                       self.raw, self.overlay], 'image-prepare.txt')
