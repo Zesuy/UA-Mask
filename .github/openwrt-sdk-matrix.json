@@ -128,7 +128,7 @@
     {
       "id": "openwrt-25.12.5-x86-64",
       "channel": "stable",
-      "smoke": false,
+      "smoke": true,
       "openwrt": "25.12.5",
       "target": "x86",
       "subtarget": "64",

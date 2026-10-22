@@ -99,6 +99,8 @@ esac
 case "$commit" in
 	*[!0-9A-Fa-f]*|'') die "commit must be a hexadecimal Git object ID" ;;
 esac
+[ "$commit" = "$(git -C "$repo_root" rev-parse HEAD)" ] || \
+	die "--commit must equal the checked-out full HEAD; refusing mislabeled artifacts"
 
 goarch=
 goarm=

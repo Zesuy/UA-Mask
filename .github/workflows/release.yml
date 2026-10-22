@@ -19,6 +19,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validation:
+    uses: ./.github/workflows/core-ci.yml
+    with:
+      build-artifacts: false
+
   prepare:
     runs-on: ubuntu-latest
     outputs:
@@ -62,6 +67,7 @@ jobs:
   go-binaries:
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -114,30 +120,58 @@ jobs:
       commit: ${{ needs.prepare.outputs.commit }}
       retention-days: 14
 
-  publish:
-    if: needs.prepare.outputs.publish == 'true'
+  assemble:
     needs:
       - prepare
+      - validation
       - go-binaries
       - openwrt-packages
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 10
     steps:
-      - name: Download release artifacts
+      - uses: actions/checkout@v4
+      - name: Download verified binaries
         uses: actions/download-artifact@v4
         with:
+          pattern: go-*
+          path: release-assets
+          merge-multiple: true
+      - name: Download verified packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: openwrt-openwrt-*
           path: release-assets
           merge-multiple: true
 
-      - name: Generate combined checksums
+      - name: Verify complete release inventory and checksums
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
         run: |
-          cd release-assets
-          find . -maxdepth 1 -type f \
-            \( -name 'UAmask-linux-*' -o -name 'UAmask_*.ipk' -o -name 'UAmask-*.apk' \) \
-            ! -name '*.sha256' ! -name '*.json' \
-            -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-          test -s SHA256SUMS
+          python3 scripts/verify-release.py \
+            --directory release-assets --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT"
+
+      - name: Upload complete release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: needs.prepare.outputs.publish == 'true'
+    needs: [prepare, assemble]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download complete verified release candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
 
       - name: Publish immutable GitHub Release
         env:

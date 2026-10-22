@@ -1,0 +1,14 @@
+{
+  "23.05.5": {
+    "image_url": "https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-23.05.5-x86-64-generic-ext4-combined.img.gz",
+    "image_sha256": "f5c77659a33bd43cba105cf2f75e56d054fa9e0b9a73dc9f2a5bcb0e126ff7d5",
+    "package_format": "ipk",
+    "package_release": "-1"
+  },
+  "25.12.5": {
+    "image_url": "https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-25.12.5-x86-64-generic-ext4-combined.img.gz",
+    "image_sha256": "23e2538e8ab0eb52dfed1c65d608ecdb71ffd432dd54885da138ae67cd9e4461",
+    "package_format": "apk",
+    "package_release": "-r1"
+  }
+}

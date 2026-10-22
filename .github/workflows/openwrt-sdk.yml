@@ -68,6 +68,8 @@ jobs:
           if [ -z "$commit" ]; then
             commit="$GITHUB_SHA"
           fi
+          test "$commit" = "$(git rev-parse HEAD)"
+          [[ "$version" =~ ^[0-9A-Za-z._+-]+$ ]]
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
@@ -95,6 +97,7 @@ jobs:
   build:
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -102,6 +105,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Prepare evidence directory
+        run: mkdir -p .cache/evidence
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -155,6 +161,7 @@ jobs:
           BUILD_COMMIT: ${{ needs.prepare.outputs.commit }}
           SDK_DIR: ${{ steps.sdk.outputs.dir }}
         run: |
+          set -o pipefail
           ./scripts/build-release.sh \
             --platform openwrt \
             --arch '${{ matrix.build_arch }}' \
@@ -166,7 +173,8 @@ jobs:
             --target '${{ matrix.target }}' \
             --subtarget '${{ matrix.subtarget }}' \
             --package-arch '${{ matrix.package_arch }}' \
-            --package-format '${{ matrix.package_format }}'
+            --package-format '${{ matrix.package_format }}' \
+            2>&1 | tee .cache/evidence/build.log
 
       - name: Verify trace metadata and checksum
         env:
@@ -218,6 +226,63 @@ jobs:
               "$SDK_DIR/staging_dir/host/bin/apk" adbdump "$package" | grep -F "arch: $EXPECTED_ARCH"
               ;;
           esac
+
+      - name: Install virtual machine prerequisites
+        if: matrix.smoke
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils openssh-client
+
+      - name: Cache pinned guest image
+        if: matrix.smoke
+        uses: actions/cache@v4
+        with:
+          path: .cache/openwrt-images
+          key: openwrt-image-${{ matrix.openwrt }}-${{ hashFiles('openwrt/tests/runtime-smoke/platforms.json') }}
+
+      - name: Install exact package and verify service in disposable OpenWrt
+        if: matrix.smoke
+        env:
+          OPENWRT_VERSION: ${{ matrix.openwrt }}
+          SDK_ID: ${{ matrix.id }}
+          PACKAGE_FORMAT: ${{ matrix.package_format }}
+        run: |
+          packages=(dist/"$SDK_ID"/*."$PACKAGE_FORMAT")
+          test "${#packages[@]}" -eq 1
+          python3 openwrt/tests/runtime-smoke/run.py \
+            --openwrt "$OPENWRT_VERSION" \
+            --package "${packages[0]}" \
+            --metadata "${packages[0]}.metadata.json" \
+            --cache-dir .cache/openwrt-images \
+            --run-dir .cache/evidence/runtime
+
+      - name: Record runtime result in job summary
+        if: always() && matrix.smoke
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          result = pathlib.Path('.cache/evidence/runtime/result.json')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Exact-package OpenWrt smoke\n\n')
+              if result.exists():
+                  summary.write('```json\n' + json.dumps(json.loads(result.read_text()), indent=2) + '\n```\n')
+              else:
+                  summary.write('Runtime did not produce a result. Inspect earlier build/prerequisite steps.\n')
+          PY
+
+      - name: Upload build and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-${{ matrix.id }}
+          if-no-files-found: warn
+          retention-days: ${{ inputs['retention-days'] || 14 }}
+          include-hidden-files: true
+          path: |
+            .cache/evidence/**/*.log
+            .cache/evidence/**/*.txt
+            .cache/evidence/**/*.json
+            .cache/evidence/**/*.jsonl
 
       - name: Upload target package
         uses: actions/upload-artifact@v4

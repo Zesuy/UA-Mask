@@ -3,6 +3,7 @@
 <!-- PROJECT SHIELDS -->
 [![GitHub Release][release-shield]][release-url]
 [![MIT License][license-shield]][license-url]
+[![Core CI](https://github.com/Zesuy/UA-Mask/actions/workflows/core-ci.yml/badge.svg)](https://github.com/Zesuy/UA-Mask/actions/workflows/core-ci.yml)
 <!-- PROJECT LOGO -->
 <br />
 <p align="center">
@@ -53,6 +54,8 @@
 ![structure-all](./docs/img/structure-all.png)
 
 ## 仓库结构
+
+参与开发请先读 [贡献与验证流程](CONTRIBUTING.md)；维护者可参考 [CI、虚拟机验证与发布](docs/development-workflow.md)。
 
 - `core/`：Go 核心代理程序，包含 `cmd/` 入口和 `internal/` 内部实现。
 - `openwrt/package/`：OpenWrt 包定义与构建入口。

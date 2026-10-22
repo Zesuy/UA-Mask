@@ -1,0 +1,31 @@
+name: 缺陷报告
+description: 提供可重现的问题和运行环境
+body:
+  - type: input
+    id: version
+    attributes:
+      label: UA-Mask 版本或 commit
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OpenWrt 版本、设备/架构、IPK 或 APK
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 重现步骤、预期与实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: coexistence
+    attributes:
+      label: 相关网络模式和共存项目
+      description: 如 OpenClash、ShellCrash、透明代理或 IPv6；请去除私人网络信息。
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志或 Actions 运行链接
+      description: 提供失败阶段和错误；勿粘贴密钥、密码或完整私人配置。

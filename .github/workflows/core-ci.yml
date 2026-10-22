@@ -2,38 +2,48 @@ name: Core CI
 
 on:
   pull_request:
-    paths:
-      - "core/**"
-      - "openwrt/**"
-      - "scripts/**"
-      - "VERSION"
-      - "go.work"
-      - "docs/config.example.json"
-      - ".github/openwrt-sdk-matrix.json"
-      - ".github/workflows/**"
   push:
     branches:
       - main
       - master
-    paths:
-      - "core/**"
-      - "openwrt/**"
-      - "scripts/**"
-      - "VERSION"
-      - "go.work"
-      - "docs/config.example.json"
-      - ".github/openwrt-sdk-matrix.json"
-      - ".github/workflows/**"
   workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_call:
+    inputs:
+      build-artifacts:
+        description: Build cross binaries and SDK smoke (release builds these separately)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: core-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: core-ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  workflow-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Validate workflow tools and pinned platform matrix
+        run: |
+          python3 scripts/verify-release.py --check-matrix
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+          python3 -m unittest discover -s openwrt/tests/runtime-smoke -p 'test_*.py' -v
+          python3 openwrt/tests/runtime-smoke/run.py --help
+      - name: Lint GitHub workflows
+        run: |
+          GOBIN="$RUNNER_TEMP/workflow-tools" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$RUNNER_TEMP/workflow-tools/actionlint" -color -shellcheck=''
+
   build-context:
     runs-on: ubuntu-latest
     outputs:
@@ -54,6 +64,7 @@ jobs:
 
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: core
@@ -76,6 +87,7 @@ jobs:
 
   unit-coverage:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: core
@@ -135,6 +147,7 @@ jobs:
 
   race-stress:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: core
@@ -147,12 +160,24 @@ jobs:
           go-version-file: core/go.mod
           cache-dependency-path: core/go.sum
       - name: Full race suite
-        run: go test -race -count=1 ./...
+        run: |
+          set -o pipefail
+          go test -race -count=1 ./... 2>&1 | tee race.log
       - name: Deterministic stress suite
-        run: make stress
+        run: |
+          set -o pipefail
+          make stress 2>&1 | tee stress.log
+      - name: Upload race and stress evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: race-stress-evidence
+          path: core/*.log
+          retention-days: 7
 
   openwrt-contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: core
@@ -177,8 +202,10 @@ jobs:
           path: core/test-artifacts/openwrt/**
 
   go-cross-build:
+    if: toJSON(inputs.build-artifacts) != 'false'
     needs: build-context
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -220,6 +247,7 @@ jobs:
           path: dist/${{ matrix.arch }}/*
 
   openwrt-sdk-smoke:
+    if: toJSON(inputs.build-artifacts) != 'false'
     needs: build-context
     uses: ./.github/workflows/openwrt-sdk.yml
     with:
@@ -232,6 +260,7 @@ jobs:
     if: always()
     needs:
       - build-context
+      - workflow-validation
       - quality
       - unit-coverage
       - race-stress
@@ -243,9 +272,17 @@ jobs:
       - name: Verify all required jobs passed
         run: |
           test '${{ needs.build-context.result }}' = success
+          test '${{ needs.workflow-validation.result }}' = success
           test '${{ needs.quality.result }}' = success
           test '${{ needs.unit-coverage.result }}' = success
           test '${{ needs.race-stress.result }}' = success
           test '${{ needs.openwrt-contract.result }}' = success
-          test '${{ needs.go-cross-build.result }}' = success
-          test '${{ needs.openwrt-sdk-smoke.result }}' = success
+          if [ "$BUILD_ARTIFACTS" = false ]; then
+            test '${{ needs.go-cross-build.result }}' = skipped
+            test '${{ needs.openwrt-sdk-smoke.result }}' = skipped
+          else
+            test '${{ needs.go-cross-build.result }}' = success
+            test '${{ needs.openwrt-sdk-smoke.result }}' = success
+          fi
+        env:
+          BUILD_ARTIFACTS: ${{ toJSON(inputs.build-artifacts) != 'false' }}
