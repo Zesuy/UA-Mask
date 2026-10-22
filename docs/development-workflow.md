@@ -71,5 +71,7 @@ runner 清理自己创建的 QEMU、overlay 和临时 SSH 材料后才落最终�
 | [OpenWrt LuCI build.yml](https://github.com/openwrt/luci/blob/580b6b1d9ec3a79edb8e2a5a9c4700b9c320ff6a/.github/workflows/build.yml) | PR 经格式检查后调用共享工作流，指定 x86_64 | PR 门禁、复用工作流；不复制其大型 feeds 的审批链 |
 | [OpenWrt packages](https://github.com/openwrt/packages/blob/c33185f91520a334d3a905a703a0cf1c33ababea/.github/workflows/multi-arch-test-build.yml) | 使用统一的 feeds 构建流程 | 同一验证定义用于 PR 和发布 |
 | [官方共享流程](https://github.com/openwrt/actions-shared-workflows/blob/fb28bcc4fac29086c22e4fee8f8af57153e0b54c/.github/workflows/multi-arch-test-build.yml) | gh-action-sdk、多架构、IPK/APK 检测、始终保存包和日志；部分目标用 QEMU user emulation + Docker 测试 | 构建/证据分离、双包格式、矩阵 fail-fast=false；增加本项目需要的完整系统 QEMU/procd 验证 |
+| [luci-app-mosdns 发布流程](https://github.com/sbwml/luci-app-mosdns/blob/6a781327e18d3a2dbe1ec1aacb63449633246ade/.github/workflows/release-build.yml) | tag 触发、架构 × OpenWrt 分支矩阵、SDK action、上传 release；单目标失败不取消其他目标 | 采用矩阵独立构建；本项目要求全目标成功和集合审计后集中发布，避免逐目标替换正式附件 |
+| [SmartDNS 发布流程](https://github.com/pymumu/smartdns/blob/d3464827bb09c0a29fd5cb9e8e6926eb4820f9d6/.github/workflows/release.yml) | 定时/手动/正式发布复用交叉构建，缓存工具链，自动替换 nightly | 采用定时检查与缓存；本项目手动运行只产生候选工件，暂不自动删除或替换 nightly/tag |
 
 官方共享 action 跟随 feeds 分支，适合大型包仓库。本项目已有 SHA 固定的两版发行 SDK，因此保留现有构建脚本，避免为接入 CI 改变发行来源。暂不引入另一个 CI 服务、通用实验平台或额外前端。

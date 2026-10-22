@@ -345,7 +345,7 @@ touch /etc/config/wireless
 /etc/init.d/uhttpd restart
 ''', 'luci-checks.txt')
         deadline = time.monotonic() + 30
-        while self.ssh("set -eu\nwget -S -O /tmp/luci-response http://127.0.0.1/cgi-bin/luci/admin/services/UAmask\ngrep -q luci_username /tmp/luci-response\ncat /tmp/luci-response\n",
+        while self.ssh("set -eu\nwget -T 5 -O /tmp/luci-response http://127.0.0.1/cgi-bin/luci/admin/services/UAmask\ngrep -q luci_username /tmp/luci-response\ncat /tmp/luci-response\n",
                       'luci-checks.txt', check=False):
             self.wait(deadline)
 
