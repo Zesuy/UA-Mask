@@ -14,6 +14,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import zlib
@@ -41,6 +42,30 @@ def extract_image(archive, destination):
                 break
         if not decoder.eof:
             raise ValueError('truncated gzip image')
+
+
+@contextmanager
+def drain_serial(console):
+    """Keep QEMU's serial transport flowing while foreground probes use SSH."""
+    stopped = threading.Event()
+
+    def consume():
+        while not stopped.is_set():
+            try:
+                if not console.recv(65536):
+                    return
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+
+    reader = threading.Thread(target=consume, daemon=True)
+    reader.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        reader.join(timeout=1)
 
 
 def validate_metadata(package, metadata, version):
@@ -197,30 +222,25 @@ class Runner:
                 self.wait(deadline)
             console.connect(str(serial))
             console.settimeout(0.2)
-            console.sendall(b'\n')
-            while True:
-                # Drain the serial transport as well as reading its logfile.
-                # Otherwise a full QEMU chardev buffer can stall guest boot.
-                try:
-                    if not console.recv(65536):
-                        raise RuntimeError('guest serial transport closed during boot')
-                except socket.timeout:
-                    pass
-                text = (self.root / 'qemu-serial.log').read_text(errors='replace')
-                if 'Please press Enter' in text and not sent:
-                    console.sendall(b'\n')
-                    sent = True
-                if re.search(r'root@[^:]+:[^\n]*#', text):
-                    break
-                self.wait(deadline, delay=0)
-            bootstrap = ("umask 077; mkdir -p /etc/dropbear; printf '%s\\n' " +
-                         shlex.quote(public) + ' > /etc/dropbear/authorized_keys; '
-                         "uci set network.lan.proto='dhcp'; uci -q delete network.lan.ipaddr; "
-                         'uci -q delete network.lan.netmask; uci commit network; '
-                         '/etc/init.d/network restart\n')
-            console.sendall(bootstrap.encode())
-            while self.ssh('true\n', 'ssh-readiness.txt', timeout=6, check=False):
-                self.wait(deadline)
+            with drain_serial(console):
+                console.sendall(b'\n')
+                while True:
+                    text = (self.root / 'qemu-serial.log').read_text(errors='replace')
+                    if 'Please press Enter' in text and not sent:
+                        console.sendall(b'\n')
+                        sent = True
+                    if re.search(r'root@[^:]+:[^\n]*#', text):
+                        break
+                    self.wait(deadline)
+                bootstrap = ("while ! uci -q get network.lan >/dev/null; do sleep 1; done; "
+                             "umask 077; mkdir -p /etc/dropbear; printf '%s\\n' " +
+                             shlex.quote(public) + ' > /etc/dropbear/authorized_keys; '
+                             "uci set network.lan.proto='dhcp'; uci -q delete network.lan.ipaddr; "
+                             'uci -q delete network.lan.netmask; uci commit network; '
+                             '/etc/init.d/network restart\n')
+                console.sendall(bootstrap.encode())
+                while self.ssh('true\n', 'ssh-readiness.txt', timeout=6, check=False):
+                    self.wait(deadline)
         self.connected = True
         self.ssh('set -eu\ncat /etc/openwrt_release\nuname -a\ncat /proc/sys/kernel/random/boot_id\n'
                  '. /etc/openwrt_release\n[ "$DISTRIB_RELEASE" = ' +
@@ -262,7 +282,7 @@ class Runner:
         self.result['expected_installed_version'] = expected
         self.ssh('set -eu\nv=$(' + version + ')\nprintf "installed_version=%s\\n" "$v"\n'
                  '[ "$v" = ' + shlex.quote(expected) + ' ]\n', 'package-status.txt')
-        self.ssh('set -eu\nv=$(/usr/bin/UAmask -version)\nprintf "%s\\n" "$v"\n'
+        self.ssh('set -eu\nv=$(/usr/bin/UAmask -v)\nprintf "%s\\n" "$v"\n'
                  '[ "$v" = ' + shlex.quote('UA-Mask version: ' + self.metadata['version']) +
                  ' ]\n', 'package-status.txt')
 

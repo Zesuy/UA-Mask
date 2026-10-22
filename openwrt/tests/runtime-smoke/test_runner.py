@@ -1,6 +1,7 @@
 import importlib.util
 import gzip
 import json
+import socket
 from pathlib import Path
 import tempfile
 import unittest
@@ -68,6 +69,14 @@ class ContractTests(unittest.TestCase):
         archive.write_bytes(payload[:-4])
         with self.assertRaisesRegex(ValueError, 'truncated'):
             smoke.extract_image(archive, raw)
+
+    def test_serial_transport_keeps_flowing_during_foreground_work(self):
+        reader, writer = socket.socketpair()
+        with reader, writer:
+            reader.settimeout(0.1)
+            writer.settimeout(2)
+            with smoke.drain_serial(reader):
+                writer.sendall(b'console output' * 200000)
 
     def test_run_directory_never_overwritten(self):
         args = self.args()
