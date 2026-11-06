@@ -31,6 +31,7 @@ type legacyValues struct {
 	cacheSize                int
 	bufferSize               int
 	poolSize                 int
+	idleTimeout              time.Duration
 	firewallUAWhitelist      string
 	firewallBypass           bool
 	firewallSetName          string
@@ -106,6 +107,7 @@ func LoadFromArgs(args []string) (*Command, error) {
 	fs.IntVar(&legacy.cacheSize, "cache-size", legacy.cacheSize, "LRU cache size (deprecated: use -config)")
 	fs.IntVar(&legacy.bufferSize, "buffer-size", legacy.bufferSize, "I/O buffer size (deprecated: use -config)")
 	fs.IntVar(&legacy.poolSize, "p", legacy.poolSize, "Worker pool size (deprecated: use -config)")
+	fs.DurationVar(&legacy.idleTimeout, "idle-timeout", legacy.idleTimeout, "Idle timeout for proxied connections (deprecated: use -config)")
 	fs.StringVar(&legacy.firewallUAWhitelist, "fw-ua-w", legacy.firewallUAWhitelist, "Firewall UA whitelist CSV (deprecated: use -config)")
 	fs.BoolVar(&legacy.firewallBypass, "fw-bypass", legacy.firewallBypass, "Enable non-HTTP bypass (deprecated: use -config)")
 	fs.StringVar(&legacy.firewallSetName, "fw-set-name", legacy.firewallSetName, "Firewall set name (deprecated: use -config)")
@@ -195,6 +197,9 @@ func applyLegacyOverrides(cfg *Config, values legacyValues, visited map[string]b
 	if visited["p"] {
 		cfg.Listen.PoolSize = values.poolSize
 		cfg.Performance.Profile = "custom"
+	}
+	if visited["idle-timeout"] {
+		cfg.Listen.IdleTimeout = values.idleTimeout
 	}
 	if visited["fw-ua-w"] {
 		cfg.Firewall.UAWhitelist = splitCSV(values.firewallUAWhitelist)
