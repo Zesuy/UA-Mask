@@ -24,6 +24,7 @@ type fileListenConfig struct {
 	DialTimeout       string `json:"dial_timeout"`
 	ClientKeepAlive   string `json:"client_keep_alive"`
 	UpstreamKeepAlive string `json:"upstream_keep_alive"`
+	IdleTimeout       string `json:"idle_timeout"`
 }
 
 type fileRewriteConfig struct {
@@ -123,6 +124,7 @@ func effectiveFileConfig(cfg *Config) fileConfig {
 			DialTimeout:       cfg.Listen.DialTimeout.String(),
 			ClientKeepAlive:   cfg.Listen.ClientKeepAlive.String(),
 			UpstreamKeepAlive: cfg.Listen.UpstreamKeepAlive.String(),
+			IdleTimeout:       cfg.Listen.IdleTimeout.String(),
 		},
 		Rewrite: fileRewriteConfig{
 			UserAgent:      cfg.Rewrite.UserAgent,
@@ -176,6 +178,14 @@ func (raw fileConfig) toConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	// idle_timeout 允许留空；留空时用默认值，避免旧配置文件报错
+	idleTimeout := defaultIdleTimeout
+	if strings.TrimSpace(raw.Listen.IdleTimeout) != "" {
+		idleTimeout, err = parseDuration("listen.idle_timeout", raw.Listen.IdleTimeout)
+		if err != nil {
+			return nil, err
+		}
+	}
 	decisionDelay, err := parseDuration("firewall.non_http.decision_delay", raw.Firewall.NonHTTP.DecisionDelay)
 	if err != nil {
 		return nil, err
@@ -207,6 +217,7 @@ func (raw fileConfig) toConfig() (*Config, error) {
 			DialTimeout:       dialTimeout,
 			ClientKeepAlive:   clientKeepAlive,
 			UpstreamKeepAlive: upstreamKeepAlive,
+			IdleTimeout:       idleTimeout,
 		},
 		Rewrite: RewriteConfig{
 			UserAgent:            raw.Rewrite.UserAgent,

@@ -4,7 +4,8 @@
     "port": 8080,
     "dial_timeout": "30s",
     "client_keep_alive": "3m0s",
-    "upstream_keep_alive": "3m0s"
+    "upstream_keep_alive": "3m0s",
+    "idle_timeout": "5m0s"
   },
   "rewrite": {
     "user_agent": "FFF",

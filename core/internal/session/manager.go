@@ -160,15 +160,29 @@ func (m *DefaultManager) HandleContext(ctx context.Context, accepted *model.Acce
 
 	done := make(chan struct{}, 2)
 
+	// 空闲超时包装：防止僵死连接长期占用 worker（池耗尽会导致 acceptLoop 死锁）
+	clientConn := net.Conn(accepted.ClientConn)
+	upConn := net.Conn(upstreamConn)
+	if m.config.IdleTimeout > 0 {
+		if wrapped := newIdleConn(accepted.ClientConn, m.config.IdleTimeout); wrapped != nil {
+			clientConn = wrapped
+			defer wrapped.Close()
+		}
+		if wrapped := newIdleConn(upstreamConn, m.config.IdleTimeout); wrapped != nil {
+			upConn = wrapped
+			defer wrapped.Close()
+		}
+	}
+
 	go func() {
 		defer upstreamConn.CloseWrite()
-		m.processClientToUpstream(&sessionState, accepted.ClientConn, upstreamConn)
+		m.processClientToUpstream(&sessionState, clientConn, upConn)
 		done <- struct{}{}
 	}()
 
 	go func() {
 		defer accepted.ClientConn.CloseWrite()
-		_, _ = io.Copy(accepted.ClientConn, upstreamConn)
+		_, _ = io.Copy(clientConn, upConn)
 		done <- struct{}{}
 	}()
 
