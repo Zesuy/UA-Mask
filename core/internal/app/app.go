@@ -51,6 +51,10 @@ type serverRuntime interface {
 	RunContext(context.Context) error
 }
 
+type ingressRuntime interface {
+	Listen() error
+}
+
 type Runtime struct {
 	config           *config.Config
 	version          string
@@ -60,6 +64,7 @@ type Runtime struct {
 	firewallExecutor executorRuntime
 	dispatcher       dispatcherRuntime
 	offload          offloadRuntime
+	ingress          ingressRuntime
 	server           serverRuntime
 	shutdownTimeout  time.Duration
 }
@@ -170,6 +175,7 @@ func NewRuntime(cfg *config.Config, version string) (*Runtime, error) {
 		firewallExecutor: firewallExecutor,
 		dispatcher:       dispatcher,
 		offload:          offloadCoordinator,
+		ingress:          redirectIngress,
 		server:           server,
 		shutdownTimeout:  runtimeShutdownTimeout,
 	}, nil
@@ -192,6 +198,15 @@ func (r *Runtime) RunContext(ctx context.Context) error {
 	r.profileStore.Start()
 	r.statsReporter.Start()
 	r.dispatcher.Start()
+
+	// Bind the ingress listener before the accept loop starts so that "the port
+	// is listening" is a truthful readiness signal for supervisors and for
+	// external firewall automation that installs the REDIRECT rule.
+	if r.ingress != nil {
+		if err := r.ingress.Listen(); err != nil {
+			return err
+		}
+	}
 
 	runErr := r.server.RunContext(ctx)
 	if ctx.Err() != nil && errors.Is(runErr, ctx.Err()) {
