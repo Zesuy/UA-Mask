@@ -415,12 +415,31 @@ generate_core_config() {
     config_get pool_size "main" "pool_size" "0"
     config_get gogc_value "main" "gogc_value" "100"
 
-    # Idle timeout for pooled worker connections. Read from UCI so it is
-    # configurable at runtime instead of being frozen at the template default.
-    # 0 or a negative value disables it (core treats timeout<=0 as "no wrap").
+    # Idle timeout for pooled worker connections, read from UCI.
+    #
+    # Accepted forms (Go time.ParseDuration syntax for a single unit):
+    #   30s  90s  5m  2m  1h  500ms        -> positive duration
+    #   0                                   -> disables idle wrapping
+    #
+    # Anything else (including negatives) falls back to 5m. Negative values are
+    # NOT a documented way to disable this: the core treats timeout<=0 as "no
+    # wrap", so 0 is the single, unambiguous switch. Accepting "-1s" would make
+    # two spellings mean the same thing and would also pass a value the OpenWrt
+    # UI cannot reasonably present.
+    #
+    # The check must be a real format match, not a character whitelist: "5..m"
+    # and "m5" contain only legal characters but are not valid durations, and
+    # passing them through makes generate_core_config fail at -check-config,
+    # which leaves the service unable to start at all.
     config_get idle_timeout "main" "idle_timeout" "5m"
     case "$idle_timeout" in
-        ''|*[!0-9smhd.]*) idle_timeout="5m" ;;
+        0) ;;  # 0 是关闭空闲超时的唯一写法，原样传给核心
+        *)
+            if ! printf '%s' "$idle_timeout" | grep -Eq '^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$'; then
+                logger -t "$NAME" "Ignoring invalid idle_timeout '$idle_timeout', using 5m."
+                idle_timeout="5m"
+            fi
+            ;;
     esac
 
     umask 077

@@ -376,24 +376,206 @@ func TestIdleConnImplementsNetConn(t *testing.T) {
 	var _ net.Conn = (*idleConn)(nil)
 }
 
-// TestDefaultIdleTickIsPositiveAndDense：watch 周期必须为正（time.NewTicker(0)
-// 会 panic），且对生产用的量级要明显小于 timeout，否则 deadline 可能在两次
-// tick 之间提前到期。
-func TestDefaultIdleTickIsPositiveAndDense(t *testing.T) {
-	for _, timeout := range []time.Duration{
-		time.Nanosecond, time.Microsecond, time.Millisecond, 90 * time.Millisecond,
-		time.Second, 5 * time.Second, 2 * time.Minute, time.Hour,
-	} {
+// TestDefaultIdleTickIsStrictlyUnderHalfTimeout：watch 周期必须为正
+// （time.NewTicker(0) 会 panic），**严格**小于 timeout/2，且不得长于 timeout。
+//
+// 为什么是严格：touch() 只把 deadline 续到 lastSeen+headroom（= timeout/2），
+// 完整续期要等下一次 tick。tick >= timeout/2 时两者首尾相接甚至倒挂，
+// ticker 一旦被负载推迟几十毫秒，deadline 就会先到期，把仍有流量的连接判成空闲。
+//
+// 历史回归点：旧实现"先抬到 1s 下限、再夹到 timeout/2"，
+//   - timeout=2s 时正好得到 1s == timeout/2，余量归零；
+//   - 1ns~1s 区间 tick 被抬成 1s，直接长于 timeout 本身。
+func TestDefaultIdleTickIsStrictlyUnderHalfTimeout(t *testing.T) {
+	timeouts := []time.Duration{
+		time.Nanosecond, 3 * time.Nanosecond, time.Microsecond, time.Millisecond,
+		10 * time.Millisecond, 90 * time.Millisecond, 199 * time.Millisecond,
+		200 * time.Millisecond, 500 * time.Millisecond, 999 * time.Millisecond,
+		time.Second, 1500 * time.Millisecond, 2 * time.Second, 3 * time.Second,
+		5 * time.Second, 10 * time.Second, time.Minute, 2 * time.Minute, time.Hour,
+		// 2s <= timeout < 3s 是旧实现里"下限抬高后再夹回"真正咬人的区间：
+		// timeout/3 < 1s，下限抬到 1s，而 1s 又 >= timeout/2。
+		2100 * time.Millisecond, 2200 * time.Millisecond, 2500 * time.Millisecond,
+		2800 * time.Millisecond, 2999 * time.Millisecond,
+	}
+	for _, timeout := range timeouts {
 		tick := defaultIdleTick(timeout)
+
+		// ① 必须为正：time.NewTicker(0) 会 panic。
 		if tick <= 0 {
 			t.Fatalf("timeout=%v produced non-positive tick %v", timeout, tick)
 		}
-		if timeout >= time.Second && tick > timeout/2 {
-			t.Fatalf("timeout=%v produced tick %v, want <= %v", timeout, tick, timeout/2)
+		// ② 不得长于 timeout 本身（旧实现在 1ns~1s 区间违反这条）。
+		if tick > timeout {
+			t.Fatalf("timeout=%v produced tick %v, which exceeds the timeout itself", timeout, tick)
+		}
+		// ③ timeout/2 是整数除法：half <= 1ns 时不存在"严格小于 half 的正 Duration"
+		//    （最小正周期就是 1ns），此时只要求取到 1ns。
+		half := timeout / 2
+		if half <= 1 {
+			if tick != 1 {
+				t.Fatalf("timeout=%v (half=%v) produced tick %v, want the 1ns floor", timeout, half, tick)
+			}
+			continue
+		}
+		// ④ 核心不变量：严格小于半个 timeout，留出补续期的余量。
+		if tick >= half {
+			t.Fatalf("timeout=%v produced tick %v, want strictly < half timeout %v", timeout, tick, half)
 		}
 	}
-	if got := defaultIdleTick(2 * time.Minute); got != 40*time.Second {
-		t.Fatalf("defaultIdleTick(2m) = %v, want 40s", got)
+
+	// 精确值：保持 timeout/3，不设下限、不夹上限。
+	for _, tc := range []struct {
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{2 * time.Minute, 40 * time.Second},
+		{30 * time.Second, 10 * time.Second},
+		{5 * time.Second, 1666666666 * time.Nanosecond},
+		{3 * time.Second, time.Second},
+		{2500 * time.Millisecond, 833333333 * time.Nanosecond}, // 旧实现在此被抬到 1s
+		{2 * time.Second, 666666666 * time.Nanosecond},         // 旧实现在此恰好 1s == timeout/2
+		{1500 * time.Millisecond, 500 * time.Millisecond},
+		{time.Second, 333333333 * time.Nanosecond},
+	} {
+		if got := defaultIdleTick(tc.timeout); got != tc.want {
+			t.Fatalf("defaultIdleTick(%v) = %v, want %v", tc.timeout, got, tc.want)
+		}
+	}
+}
+
+// TestNewIdleConnClampsCallerTick 确认显式传入过大的 tick 会被夹回安全区间，
+// 这条不变量不能只靠调用方自觉。
+func TestNewIdleConnClampsCallerTick(t *testing.T) {
+	const timeout = 100 * time.Millisecond
+	for _, requested := range []time.Duration{
+		timeout, timeout / 2, timeout * 2, time.Hour,
+	} {
+		client, server := net.Pipe()
+		ic := newIdleConnWithTick(server, timeout, requested)
+		if ic == nil {
+			client.Close()
+			t.Fatal("expected non-nil idleConn")
+		}
+		if ic.tick >= timeout/2 {
+			t.Fatalf("requested tick %v -> %v, want strictly < %v", requested, ic.tick, timeout/2)
+		}
+		if ic.tick <= 0 {
+			t.Fatalf("requested tick %v -> %v, want positive", requested, ic.tick)
+		}
+		ic.Close()
+		client.Close()
+	}
+}
+
+// TestIdleConnActivityRightAfterTickIsNotCut 复现评审提到的时序：
+// 活动刚好发生在一次 watch tick 之后。
+//
+// tick 紧跟在 tick 之后发生时，touch 只把 deadline 续到 lastSeen+headroom，
+// 而下一轮补续期要等一个完整 tick 之后。只要 headroom > tick，补续期就还来得及，
+// 连接不会被误判超时。旧实现在 tick >= timeout/2 时这里会失败。
+func TestIdleConnActivityRightAfterTickIsNotCut(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	const timeout = 200 * time.Millisecond
+	// 故意使用默认 tick（timeout/3 ≈ 66ms），它就是"tick 之后"窗口的来源。
+	ic := newIdleConnWithTick(&discardingWriteConn{Conn: server}, timeout, 0)
+	if ic == nil {
+		t.Fatal("expected non-nil idleConn")
+	}
+	defer ic.Close()
+
+	if ic.tick >= timeout/2 {
+		t.Fatalf("precondition failed: tick %v must be < %v", ic.tick, timeout/2)
+	}
+
+	readErr := make(chan error, 1)
+	go func() {
+		_, err := ic.Read(make([]byte, 8))
+		readErr <- err
+	}()
+
+	// 让连接活得比好几个 timeout 久，并且活动卡在"刚过 tick"的相位上：
+	// 高频 touch 会覆盖各种相位，其中包括紧跟在 tick 之后的那些。
+	deadline := time.Now().Add(4 * timeout)
+	tick := time.NewTicker(timeout / 8)
+	defer tick.Stop()
+
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-readErr:
+			t.Fatalf("blocked read returned while the peer was still active: %v", err)
+		case <-tick.C:
+			if _, err := ic.Write([]byte("keepalive")); err != nil {
+				t.Fatalf("activity write: %v", err)
+			}
+		}
+	}
+
+	// 活动停止后，仍应正常以超时结束。
+	select {
+	case err := <-readErr:
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatalf("read error after activity stopped = %v, want a timeout error", err)
+		}
+	case <-time.After(10 * timeout):
+		t.Fatal("read never timed out after activity stopped")
+	}
+}
+
+// TestIdleConnShortTimeoutWithActivity 覆盖"短超时 + 持续活动"这个组合：
+// 短 timeout 下 tick 被夹得很小，最容易暴露续期与 deadline 的竞争。
+func TestIdleConnShortTimeoutWithActivity(t *testing.T) {
+	for _, timeout := range []time.Duration{
+		40 * time.Millisecond, 80 * time.Millisecond, 150 * time.Millisecond,
+	} {
+		// 每一轮都要一对新的 pipe：上一轮 Close 会关掉底层连接。
+		client, server := net.Pipe()
+
+		ic := newIdleConnWithTick(&discardingWriteConn{Conn: server}, timeout, 0)
+		if ic == nil {
+			client.Close()
+			t.Fatal("expected non-nil idleConn")
+		}
+
+		readErr := make(chan error, 1)
+		go func() {
+			_, err := ic.Read(make([]byte, 8))
+			readErr <- err
+		}()
+
+		// 让连接活过 10 个 timeout，期间保持出方向有流量。
+		stop := time.Now().Add(10 * timeout)
+		pulse := time.NewTicker(timeout / 4)
+		aborted := false
+		for time.Now().Before(stop) {
+			select {
+			case err := <-readErr:
+				pulse.Stop()
+				ic.Close()
+				client.Close()
+				t.Fatalf("timeout=%v: read cut off while active: %v", timeout, err)
+			case <-pulse.C:
+				if _, err := ic.Write([]byte("x")); err != nil {
+					aborted = true
+					break
+				}
+			}
+			if aborted {
+				break
+			}
+		}
+		pulse.Stop()
+		ic.Close()
+		client.Close()
+
+		select {
+		case <-readErr:
+		case <-time.After(timeout * 5):
+			t.Fatalf("timeout=%v: read never returned after Close", timeout)
+		}
 	}
 }
 

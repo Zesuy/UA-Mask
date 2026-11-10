@@ -52,6 +52,9 @@ func newIdleConn(conn net.Conn, timeout time.Duration) *idleConn {
 // newIdleConnWithTick 允许调用方固定 watch 周期；tick <= 0 时按 timeout 推导。
 // 生产路径只走 newIdleConn；测试用它把周期钉到毫秒级，免得为了等一次 tick
 // 把用例拖到秒级。
+//
+// 传入的 tick 也会被夹到严格小于 timeout/2：这条不变量是"活跃连接不被误判"
+// 的前提，不能靠调用方自觉。
 func newIdleConnWithTick(conn net.Conn, timeout, tick time.Duration) *idleConn {
 	if timeout <= 0 {
 		return nil
@@ -64,9 +67,7 @@ func newIdleConnWithTick(conn net.Conn, timeout, tick time.Duration) *idleConn {
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
-	if c.tick <= 0 {
-		c.tick = defaultIdleTick(timeout)
-	}
+	c.tick = clampIdleTick(c.tick, timeout)
 	c.mu.Lock()
 	c.installLocked(timeout)
 	c.mu.Unlock()
@@ -74,20 +75,49 @@ func newIdleConnWithTick(conn net.Conn, timeout, tick time.Duration) *idleConn {
 	return c
 }
 
-// defaultIdleTick 取 timeout/3，并保证周期小于 timeout/2：
-// 太密会空转，太疏则 deadline 可能在两次 tick 之间提前到期。
-func defaultIdleTick(timeout time.Duration) time.Duration {
-	tick := timeout / 3
-	if tick < time.Second {
-		tick = time.Second
-	}
-	if half := timeout / 2; half > 0 && tick > half {
-		tick = half
-	}
-	// timeout 小到 time.Second 都显不出差别时，退回一个必定为正的周期，
-	// 否则 time.NewTicker(0) 会 panic。
+// clampIdleTick 把 tick 收敛到 (0, timeout/2) 区间；tick <= 0 时取默认值。
+func clampIdleTick(tick, timeout time.Duration) time.Duration {
 	if tick <= 0 {
-		tick = timeout
+		return defaultIdleTick(timeout)
+	}
+	limit := timeout / 2
+	if tick >= limit {
+		tick = limit - 1
+	}
+	if tick <= 0 {
+		tick = 1
+	}
+	return tick
+}
+
+// minIdleTickInterval 曾是"避免空转"的 1s 下限，现已移除，原因见 defaultIdleTick。
+
+// defaultIdleTick 给出 watch 的检查周期：timeout/3，且恒为正。
+//
+// 为什么是 timeout/3 而不是"1s 下限 + 夹到 timeout/2"：
+//
+//	touch() 只把 deadline 续到 lastSeen+headroom（默认 timeout/2），
+//	完整续期要等下一次 watch tick 补到 lastSeen+timeout。
+//	因此必须保证 tick < headroom，否则补续期的时机撞上、甚至晚于已装 deadline，
+//	"仍有流量"的连接就会被判空闲掐断——ticker 在负载下延迟几十毫秒是常态。
+//
+// 早年的写法是"先抬到 1s 下限、再夹到 timeout/2"，有两处错：
+//  1. 在 timeout=2s 时正好落成 1s == timeout/2，余量归零；
+//  2. 在 2s < timeout < 3s 时下限把 tick 抬到 1s，与 timeout/2 只差几十毫秒，
+//     同样脆。
+//
+// 而 1s 下限本身也帮不上忙：它只在 timeout < 3s 时起作用，而生产配置的
+// idle_timeout 是分钟级（2m -> tick 40s），根本触碰不到下限；短 timeout
+// 只出现在测试里，那里反而需要更细的 tick。故直接取 timeout/3，
+// 让 tick 与 deadline 之间恒有 timeout/6 的余量。
+func defaultIdleTick(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return time.Nanosecond
+	}
+	tick := timeout / 3
+	if tick <= 0 {
+		// 亚纳秒级 timeout 除以 3 会截断成 0，而 time.NewTicker(0) 会 panic。
+		tick = 1
 	}
 	return tick
 }
@@ -110,10 +140,17 @@ func (c *idleConn) touch() {
 		return
 	}
 	c.lastSeen = seen
-	// 已装 deadline 若还盖得住"新活动 + 半个超时"，就不打断内核；剩下的
-	// 交给 watch 续到完整 timeout。这样活跃连接在任何方向上都不会被判超时。
+	// 已装 deadline 若还盖得住这次的续期窗口，就不打断内核（热点路径零 syscall）；
+	// 剩下那截由 watch 续到完整 timeout。
+	//
+	// 续期窗口必须严格大于 tick：touch 之后要保证"下一次 tick 一定会到来并
+	// 补足 deadline"，否则 tick 一旦被负载推迟，deadline 会先于补续期到期，
+	// 把仍有流量的连接判成空闲。取 timeout/2 满足 2*tick < timeout 的全部情形。
 	headroom := c.timeout / 2
-	if headroom <= 0 {
+	if headroom <= c.tick {
+		headroom = c.tick + (c.timeout-c.tick)/2
+	}
+	if headroom <= 0 || headroom > c.timeout {
 		headroom = c.timeout
 	}
 	c.installLocked(seen + headroom)
