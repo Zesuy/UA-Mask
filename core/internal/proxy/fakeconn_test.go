@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -58,25 +59,52 @@ func (f *fakeConn) tcpConn() *net.TCPConn {
 	return f.conn
 }
 
-// Closed 报告连接是否已被关闭。
-// 直接检查 conn 是否还被跟踪（net.TCPConn 关闭后 File() 会报错），
-// 比"写探针"更可靠：写探针在 loopback 上有缓冲，关闭瞬间仍可能成功。
+// peerConn 返回对端连接，用于观察关闭是否真的传播出去。
+func (f *fakeConn) peerConn() *net.TCPConn {
+	return f.peer
+}
+
+// Closed 报告服务端这一侧的连接是否已被对方感知到关闭。
+//
+// 判断方式：服务端 ClientConn 被 Close 后，loopback 对端必然读到 EOF/Reset。
+// 这才是真实的关闭语义，而不是替身内部改的一个标志位。
+//
+// 不能再用 (*net.TCPConn).File() 嗅探：在 Windows 上对正常 ESTABLISHED 的
+// TCPConn 调 File() 会返回 "use of closed network connection"，于是**活连接
+// 也被判定为已关闭**，使所有 "must be closed" 断言恒真、形同虚设。
+//
+// Read 的三种结果分别对应：
+//   - 超时           -> 连接仍然活着（没关闭，也没数据）
+//   - EOF / Reset    -> 已关闭
+//   - 读到数据       -> 仍然活着
 func (f *fakeConn) Closed() bool {
 	if f.closed.Load() {
 		return true
 	}
-	if f.conn == nil {
+	if f.conn == nil || f.peer == nil {
 		return true
 	}
-	// 关闭后的 *net.TCPConn，File() 会返回 use of closed network connection
-	fd, err := f.conn.File()
-	if err != nil {
+
+	if err := f.peer.SetReadDeadline(time.Now().Add(probeTimeout)); err != nil {
+		// 对端已不可用，视作已关闭
 		f.closed.Store(true)
 		return true
 	}
-	_ = fd.Close()
+	var buf [1]byte
+	if _, err := f.peer.Read(buf[:]); err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return false
+		}
+		f.closed.Store(true)
+		return true
+	}
+	// 读到数据说明连接仍然活着。
 	return false
 }
+
+// probeTimeout 是 Closed() 探测时愿意等的时长，需小于测试里的轮询间隔上限。
+const probeTimeout = 30 * time.Millisecond
 
 // Close 关闭连接对。
 func (f *fakeConn) Close() {

@@ -13,3 +13,7 @@ config 'UAmask' 'main'
     option proxy_host '0'
     option whitelist ''
     option log_file '/tmp/UAmask/UAmask.log'
+    # Idle timeout for pooled worker connections. Keep this well below the
+    # upstream NAT idle timer so a dead peer never holds a worker for long.
+    # Set to 0 to disable.
+    option idle_timeout '5m'

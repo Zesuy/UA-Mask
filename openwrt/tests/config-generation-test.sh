@@ -54,7 +54,14 @@ config_get() {
         log_file) value="$TEST_LOG_FILE" ;;
     esac
 
+    # Simulate an unset option: hand back the caller's default untouched.
+    if [ "${TEST_IDLE_UNSET:-0}" = "1" ] && [ "$option" = "idle_timeout" ]; then
+        eval "$variable=\$value"
+        return 0
+    fi
+
     case "$TEST_SCENARIO:$option" in
+        idle:idle_timeout) value="$TEST_IDLE_VALUE" ;;
         complete:port) value="13000" ;;
         complete:ua) value="Mask UA" ;;
         complete:log_level) value="debug" ;;
@@ -72,6 +79,7 @@ config_get() {
         complete:buffer_size) value="4096" ;;
         complete:pool_size) value="9" ;;
         complete:gogc_value) value="80" ;;
+        complete:idle_timeout) value="90s" ;;
         safety:firewall_nonhttp_threshold) value="0" ;;
         safety:firewall_timeout) value="1" ;;
         safety:firewall_decision_delay) value="0" ;;
@@ -136,6 +144,7 @@ assert config == {
         "dial_timeout": "30s",
         "client_keep_alive": "3m",
         "upstream_keep_alive": "3m",
+        "idle_timeout": "90s",
     },
     "rewrite": {
         "user_agent": "Mask UA",
@@ -177,6 +186,38 @@ assert config == {
 assert config["observe"]["log_file"].endswith("/log/UAmask.log")
 PY
 pass "OWRT-JSON-001 complete UCI mapping"
+
+# Idle timeout must come from UCI, not from a hardcoded template default.
+# Covers: explicit value, unset fallback, disable via 0, and an invalid value
+# falling back to the safe default instead of producing an unparsable config.
+for idle_case in "90s:90s" "__unset__:5m" "0:0" "not-a-duration:5m"; do
+    uci_value="${idle_case%:*}"
+    expected="${idle_case##*:}"
+
+    TEST_SCENARIO="idle"
+    if [ "$uci_value" = "__unset__" ]; then
+        TEST_IDLE_UNSET=1
+        TEST_IDLE_VALUE=""
+    else
+        TEST_IDLE_UNSET=0
+        TEST_IDLE_VALUE="$uci_value"
+    fi
+    generate_core_config || fail "OWRT-IDLE-001 generate $uci_value"
+    python3 - "$CONFIG_PATH" "$expected" "$uci_value" <<'PY' || fail "OWRT-IDLE-001 verify $uci_value"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as config_file:
+    config = json.load(config_file)
+
+assert config["listen"]["idle_timeout"] == sys.argv[2], (
+    f"idle_timeout: uci={sys.argv[3]!r} -> {config['listen']['idle_timeout']!r}, want {sys.argv[2]!r}"
+)
+PY
+    "$PROG" -check-config -config "$CONFIG_PATH" >/dev/null || fail "OWRT-IDLE-001 validate $uci_value"
+done
+TEST_IDLE_UNSET=0
+pass "OWRT-IDLE-001 idle_timeout is read from UCI"
 
 TEST_SCENARIO="safety"
 generate_core_config || fail "OWRT-SAFE-001 generate safety config"
