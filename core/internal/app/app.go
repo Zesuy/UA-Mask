@@ -204,7 +204,14 @@ func (r *Runtime) RunContext(ctx context.Context) error {
 	// external firewall automation that installs the REDIRECT rule.
 	if r.ingress != nil {
 		if err := r.ingress.Listen(); err != nil {
-			return err
+			// The background components above are already started, so a bare
+			// return would leave the executor and dispatcher half-initialized
+			// and drop any queued work on the floor. Run the same teardown as
+			// the normal path and report both errors.
+			return errors.Join(
+				fmt.Errorf("listen on ingress: %w", err),
+				r.shutdown(),
+			)
 		}
 	}
 
