@@ -54,7 +54,14 @@ config_get() {
         log_file) value="$TEST_LOG_FILE" ;;
     esac
 
+    # Simulate an unset option: hand back the caller's default untouched.
+    if [ "${TEST_IDLE_UNSET:-0}" = "1" ] && [ "$option" = "idle_timeout" ]; then
+        eval "$variable=\$value"
+        return 0
+    fi
+
     case "$TEST_SCENARIO:$option" in
+        idle:idle_timeout) value="$TEST_IDLE_VALUE" ;;
         complete:port) value="13000" ;;
         complete:ua) value="Mask UA" ;;
         complete:log_level) value="debug" ;;
@@ -72,6 +79,7 @@ config_get() {
         complete:buffer_size) value="4096" ;;
         complete:pool_size) value="9" ;;
         complete:gogc_value) value="80" ;;
+        complete:idle_timeout) value="90s" ;;
         safety:firewall_nonhttp_threshold) value="0" ;;
         safety:firewall_timeout) value="1" ;;
         safety:firewall_decision_delay) value="0" ;;
@@ -136,6 +144,7 @@ assert config == {
         "dial_timeout": "30s",
         "client_keep_alive": "3m",
         "upstream_keep_alive": "3m",
+        "idle_timeout": "90s",
     },
     "rewrite": {
         "user_agent": "Mask UA",
@@ -177,6 +186,62 @@ assert config == {
 assert config["observe"]["log_file"].endswith("/log/UAmask.log")
 PY
 pass "OWRT-JSON-001 complete UCI mapping"
+
+# Idle timeout must come from UCI, not from a hardcoded template default, and
+# the value must be a real Go duration - not merely something built from legal
+# characters. "5..m" and "m5" pass a character whitelist but fail
+# -check-config, which would leave the service unable to start.
+#
+# Negative values are deliberately rejected: 0 is the single documented way to
+# disable idle wrapping, and the UI cannot reasonably present "-1s".
+#
+# Format: <value>:<expected effective value>
+for idle_case in \
+    "90s:90s" \
+    "5m:5m" \
+    "1h:1h" \
+    "500ms:500ms" \
+    "0:0" \
+    "__unset__:5m" \
+    "5..m:5m" \
+    "m5:5m" \
+    ".5m:5m" \
+    "5:5m" \
+    "-1s:5m" \
+    "-90s:5m" \
+    "not-a-duration:5m" \
+    "5x:5m" \
+    " s:5m"
+do
+    uci_value="${idle_case%:*}"
+    expected="${idle_case##*:}"
+
+    TEST_SCENARIO="idle"
+    if [ "$uci_value" = "__unset__" ]; then
+        TEST_IDLE_UNSET=1
+        TEST_IDLE_VALUE=""
+    else
+        TEST_IDLE_UNSET=0
+        TEST_IDLE_VALUE="$uci_value"
+    fi
+    generate_core_config || fail "OWRT-IDLE-001 generate [$uci_value]"
+    python3 - "$CONFIG_PATH" "$expected" "$uci_value" <<'PY' || fail "OWRT-IDLE-001 verify [$uci_value]"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as config_file:
+    config = json.load(config_file)
+
+got = config["listen"]["idle_timeout"]
+assert got == sys.argv[2], (
+    f"idle_timeout: uci={sys.argv[3]!r} -> {got!r}, want {sys.argv[2]!r}"
+)
+PY
+    # 关键：落到 -check-config 也必须被接受，否则服务起不来。
+    "$PROG" -check-config -config "$CONFIG_PATH" >/dev/null || fail "OWRT-IDLE-001 validate [$uci_value]"
+done
+TEST_IDLE_UNSET=0
+pass "OWRT-IDLE-001 idle_timeout is read from UCI and format-checked"
 
 TEST_SCENARIO="safety"
 generate_core_config || fail "OWRT-SAFE-001 generate safety config"

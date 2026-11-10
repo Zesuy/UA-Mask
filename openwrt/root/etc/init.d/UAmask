@@ -363,6 +363,7 @@ generate_core_config() {
     local enable_firewall_set firewall_ua_whitelist firewall_ua_bypass firewall_drop_on_match
     local firewall_advanced_settings firewall_nonhttp_threshold firewall_timeout firewall_decision_delay
     local operating_profile cache_size buffer_size pool_size gogc_value
+    local idle_timeout
 
     if [ ! -r "$JSHN_LIB" ]; then
         logger -t "$NAME" "Cannot generate core config: jshn.sh is unavailable."
@@ -414,6 +415,33 @@ generate_core_config() {
     config_get pool_size "main" "pool_size" "0"
     config_get gogc_value "main" "gogc_value" "100"
 
+    # Idle timeout for pooled worker connections, read from UCI.
+    #
+    # Accepted forms (Go time.ParseDuration syntax for a single unit):
+    #   30s  90s  5m  2m  1h  500ms        -> positive duration
+    #   0                                   -> disables idle wrapping
+    #
+    # Anything else (including negatives) falls back to 5m. Negative values are
+    # NOT a documented way to disable this: the core treats timeout<=0 as "no
+    # wrap", so 0 is the single, unambiguous switch. Accepting "-1s" would make
+    # two spellings mean the same thing and would also pass a value the OpenWrt
+    # UI cannot reasonably present.
+    #
+    # The check must be a real format match, not a character whitelist: "5..m"
+    # and "m5" contain only legal characters but are not valid durations, and
+    # passing them through makes generate_core_config fail at -check-config,
+    # which leaves the service unable to start at all.
+    config_get idle_timeout "main" "idle_timeout" "5m"
+    case "$idle_timeout" in
+        0) ;;  # 0 是关闭空闲超时的唯一写法，原样传给核心
+        *)
+            if ! printf '%s' "$idle_timeout" | grep -Eq '^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$'; then
+                logger -t "$NAME" "Ignoring invalid idle_timeout '$idle_timeout', using 5m."
+                idle_timeout="5m"
+            fi
+            ;;
+    esac
+
     umask 077
     mkdir -p "$CORE_CONFIG_DIR" || return 1
     mkdir -p "$(dirname "$log_file")" || return 1
@@ -426,6 +454,7 @@ generate_core_config() {
     json_add_string "dial_timeout" "30s"
     json_add_string "client_keep_alive" "3m"
     json_add_string "upstream_keep_alive" "3m"
+    json_add_string "idle_timeout" "$idle_timeout"
     json_close_object
 
     json_add_object "rewrite"

@@ -67,6 +67,25 @@ func (r *Redirect) Accept() (*model.AcceptedSession, error) {
 	}, nil
 }
 
+// Listen binds the redirect listener ahead of the first Accept call.
+//
+// The listener is created lazily inside Accept, which makes "is the process
+// listening on its port?" an unreliable liveness signal right after startup: a
+// freshly started instance is up but has no listening socket until a client
+// happens to connect. Anything that gates traffic on that signal - an external
+// iptables REDIRECT installer, a health check, a restart watchdog - then
+// observes "not listening" and can deadlock the proxy: no redirect rule means
+// no connection, no connection means no lazy bind, and no bind keeps the rule
+// away forever.
+//
+// Binding up front makes the listening socket the truthful readiness signal and
+// surfaces bind failures (for example EADDRINUSE from a competing instance) at
+// startup instead of after the first connection arrives.
+func (r *Redirect) Listen() error {
+	_, err := r.ensureListener()
+	return err
+}
+
 func (r *Redirect) Close() error {
 	if r == nil {
 		return nil

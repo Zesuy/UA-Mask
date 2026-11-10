@@ -115,7 +115,19 @@ func (s *Server) runWithPool(
 			closeAccepted(accepted)
 			tracker.Done(accepted)
 			return false
+		default:
 		}
+		// 池满：不能在这里无限阻塞，否则 acceptLoop 停摆 —— 不再调用
+		// ingress.Accept()，新连接全部堆在 TCP listen backlog，表现为
+		// "进程还在、端口还在监听，但 LAN 全断"。
+		//
+		// 退化为"快速失败"：关掉这一条连接，让 acceptLoop 继续 accept。
+		// 客户端会收到 FIN（三次握手已完成），毫秒级感知失败，而不是
+		// 卡在超时上。已建立的连接不受影响。
+		logrus.Debugf("[server] worker pool full, rejecting connection to %s", accepted.Target.Address)
+		closeAccepted(accepted)
+		tracker.Done(accepted)
+		return true
 	})
 	shutdown()
 	close(sessionChan)

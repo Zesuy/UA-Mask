@@ -4,7 +4,8 @@
     "port": 12032,
     "dial_timeout": "12s",
     "client_keep_alive": "2m0s",
-    "upstream_keep_alive": "4m0s"
+    "upstream_keep_alive": "4m0s",
+    "idle_timeout": "5m0s"
   },
   "rewrite": {
     "user_agent": "TraceUA",

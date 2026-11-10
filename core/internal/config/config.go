@@ -25,6 +25,9 @@ type ListenConfig struct {
 	DialTimeout       time.Duration
 	ClientKeepAlive   time.Duration
 	UpstreamKeepAlive time.Duration
+	// IdleTimeout 是连接双向空闲多久后强制关闭（0 表示不启用）。
+	// 目的：防止僵死连接长期占用 worker，导致池耗尽后 acceptLoop 死锁。
+	IdleTimeout time.Duration
 }
 
 type RewriteConfig struct {

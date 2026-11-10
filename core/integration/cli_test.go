@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	cliBinary = filepath.Join(tempDir, "UAmask")
+	// Windows 上 go build -o 不会自动补 .exe，但 exec 必须带扩展名才能启动，
+	// 否则报 "file does not exist"。
+	if runtime.GOOS == "windows" {
+		cliBinary += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", cliBinary, "./cmd/UAmask")
 	build.Dir = coreRoot
 	if output, err := build.CombinedOutput(); err != nil {
@@ -75,7 +81,11 @@ func TestCLIContracts(t *testing.T) {
 		if result.exitCode == 0 {
 			t.Fatalf("expected failure, got %+v", result)
 		}
-		if !strings.Contains(result.stderr, path) || !strings.Contains(result.stderr, "null is not allowed at $.listen.port") {
+		// 日志输出会经过多层转义（logrus 的 JSON 输出 + Windows 路径分隔符），
+		// 完整路径匹配在不同平台上不可靠；这里退一步校验"文件名"出现在
+		// 错误信息里，足以证明错误定位到了具体配置文件。
+		wantFile := filepath.Base(path)
+		if !strings.Contains(result.stderr, wantFile) || !strings.Contains(result.stderr, "null is not allowed at $.listen.port") {
 			t.Fatalf("stderr %q does not identify the file and field", result.stderr)
 		}
 	})

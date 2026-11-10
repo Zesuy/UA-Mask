@@ -81,7 +81,14 @@ func TestLoadJSONConfigErrorsIncludePath(t *testing.T) {
 	t.Parallel()
 
 	path := writeConfigFile(t, `{"schema_version":1,"listen":{"port":0}}`)
-	if _, err := LoadFile(path); err == nil || !strings.Contains(err.Error(), path) {
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatalf("expected error for invalid config")
+	}
+	// 错误信息里的路径可能经过 %q 转义（Windows 的 `\` 会变成 `\\`），
+	// 因此用去掉转义后的形式做包含判断，避免平台差异导致误报。
+	unescaped := strings.ReplaceAll(err.Error(), `\\`, `\`)
+	if !strings.Contains(unescaped, path) {
 		t.Fatalf("expected config path in error, got %v", err)
 	}
 }

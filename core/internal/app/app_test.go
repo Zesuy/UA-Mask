@@ -139,6 +139,16 @@ type offloadComponent struct {
 
 func (component *offloadComponent) Stop() { component.log.Add("offload.stop") }
 
+type ingressComponent struct {
+	log       *lifecycleLog
+	listenErr error
+}
+
+func (component *ingressComponent) Listen() error {
+	component.log.Add("ingress.listen")
+	return component.listenErr
+}
+
 type serverComponent struct {
 	log       *lifecycleLog
 	started   chan struct{}
@@ -212,6 +222,36 @@ func runtimeWithFakes(log *lifecycleLog) *Runtime {
 		offload:          &offloadComponent{log: log},
 		shutdownTimeout:  time.Second,
 	}
+}
+
+// TestRuntimeRunContextShutsDownWhenIngressListenFails 盯住失败路径：
+// 监听失败时后台组件已经 Start 过，RunContext 必须走同一套收尾再返回，
+// 不能留下半初始化的 executor / dispatcher，也不能让 accept 循环启动。
+func TestRuntimeRunContextShutsDownWhenIngressListenFails(t *testing.T) {
+	listenFailure := errors.New("listen failed: address already in use")
+	flushFailure := errors.New("flush failed")
+
+	log := &lifecycleLog{}
+	runtime := runtimeWithFakes(log)
+	runtime.ingress = &ingressComponent{log: log, listenErr: listenFailure}
+	runtime.firewallExecutor.(*executorComponent).flushErr = flushFailure
+	runtime.server = &serverComponent{log: log, started: make(chan struct{})}
+
+	err := runtime.RunContext(context.Background())
+	if !errors.Is(err, listenFailure) {
+		t.Fatalf("LIFE-ERROR-202 error = %v, want the listen failure", err)
+	}
+	if !errors.Is(err, flushFailure) {
+		t.Fatalf("LIFE-ERROR-202 error = %v, want the shutdown failure joined in", err)
+	}
+
+	want := []string{
+		"executor.start", "store.start", "stats.start", "dispatcher.start",
+		"ingress.listen",
+		"offload.stop", "executor.flush", "executor.stop",
+		"dispatcher.idle", "dispatcher.stop", "stats.stop", "store.stop",
+	}
+	assertLifecycleCalls(t, log.Values(), want)
 }
 
 func assertLifecycleCalls(t *testing.T, got, want []string) {
